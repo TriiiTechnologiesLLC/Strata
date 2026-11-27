@@ -26,9 +26,9 @@
 namespace strata::ink {
 
 struct Ink5090DraftPolicy {
-    // Calibrated RTX 5090 hardware timing model (deterministic; zero wall-clock jitter across rounds or host CPUs)
+    // FIXED RTX 5090 cost model: nothing below is updated from a measured time (see observe_* and update_verify_timing)
     double   ema_plain_base_ms = 4.72;
-    double   ema_draft_ms      = 1.15;
+    double   ema_draft_ms      = 1.30;   // FIXED (measured 1.19-1.41 ms; no longer updated)
     double   verify_scale      = 1.00;
     double   obs_verify_ms[25] = {};
     uint32_t m_calls[25]       = {};
@@ -73,6 +73,7 @@ struct Ink5090DraftPolicy {
         obs_pred_ema       = 0.72;
         cal_alpha          = 1.00;
         ema_gain_tok       = 0.75;
+        ema_df2_rate       = 0.52;   // per request, like the other averages: a request's windows do not depend on the requests before it
         pld_gen_step_p     = 0.90;
         pld_prompt_step_p  = 0.80;
         expected_next_pos  = -1;
@@ -102,25 +103,25 @@ struct Ink5090DraftPolicy {
         static constexpr double kCurve[17] = {
             4.72,   // 0
             4.72,   // 1 (plain forward_seq + fast argmax + 1-row ingest)
-            5.65,   // 2
-            6.14,   // 3
-            6.62,   // 4 (end of M_pad=4 argmax & <4> FP8 GEMV)
-            7.10,   // 5 (end of tc_attn nslab=1)
-            7.60,   // 6 (start of tc_attn nslab=2)
-            8.04,   // 7
-            8.48,   // 8 (end of M=2..8 grouped_reg, SWA slab=1, M_pad=8 argmax)
-            8.88,   // 9
-            9.24,   // 10 (end of tc_attn nslab=2)
-            9.62,   // 11 (start of tc_attn nslab=3)
-            9.96,   // 12
-            10.30,  // 13
-            10.64,  // 14
-            10.98,  // 15 (end of tc_attn nslab=3)
-            11.32   // 16
+            6.11,   // 2   FIXED values (f-0223-cuda2-det): the converged values of the old online averages on an RTX 5090 (36 short prompts, 11-27: verify step minus its
+            7.27,   // 3   context term; M >= 9 sat at the old clamp of 1.55 x the first calibration, 8.88 / 9.24 / 9.62 / 9.96 / 10.30 / 10.64 / 10.98 / 11.32 ms)
+            8.11,   // 4
+            8.96,   // 5
+            9.96,   // 6
+            10.88,  // 7
+            11.76,  // 8
+            13.76,  // 9
+            14.32,  // 10
+            14.91,  // 11
+            15.44,  // 12
+            15.96,  // 13
+            16.49,  // 14
+            17.02,  // 15
+            17.55   // 16
         };
         if (m <= 1) return kCurve[1];
         if (m <= 16) return kCurve[m];
-        return kCurve[16] + 0.36 * (double)(m - 16);
+        return kCurve[16] + 0.53 * (double)(m - 16);
     }
 
     // tc_attn reads the entire global KV cache ONCE per 5-row slab (nslab = 1 for M = 1..5!), so M = 2..5 pays ZERO extra long-KV penalty!
@@ -602,28 +603,15 @@ struct Ink5090DraftPolicy {
         return out_tr.M;
     }
 
-    void observe_plain_step(int anchor_pos, double plain_ms) noexcept {
-        if (++plain_calls >= 3 && plain_ms > 1.5 && plain_ms < 25.0) {
-            const double raw_base = plain_ms - ctx_kv_ms(1, anchor_pos);
-            const double clamped  = std::max(2.6, std::min(6.5, raw_base));
-            ema_plain_base_ms = 0.85 * ema_plain_base_ms + 0.15 * clamped;
-        }
+    // DETERMINISTIC COST MODEL (f-0223-cuda2-det): no measured time reaches a decision. The step costs below (plain step, draft call, verify step per row count,
+    // context term) are FIXED numbers measured on an RTX 5090 (kVerifyBase / kPlainBaseMs / kDraftMs); the old online averages of the live timings
+    // (ema_plain_base_ms, ema_draft_ms, obs_verify_ms, verify_scale) are not updated any more, so the draft windows depend only on the tokens and the DFlash 2 confidences.
+    void observe_plain_step(int anchor_pos, double /*plain_ms*/) noexcept {
+        ++plain_calls;
         expected_next_pos = anchor_pos + 1;
     }
 
-    void update_verify_timing(int M, int anchor_pos, double verify_ms) noexcept {
-        if (M < 2 || M > 24) return;
-        // Skip first 2 calls of any M (CUDA Graph capture + pdl::instantiate host overhead!)
-        if (++m_calls[M] < 3) return;
-        if (verify_ms > 2.0 && verify_ms < 35.0) {
-            const double prior = prior_verify_base_ms(M);
-            const double raw_b = verify_ms - ctx_kv_ms(M, anchor_pos);
-            const double base  = std::max(0.65 * prior, std::min(1.55 * prior, raw_b));
-            obs_verify_ms[M] = (obs_verify_ms[M] > 1.0) ? (0.82 * obs_verify_ms[M] + 0.18 * base) : base;
-            const double ratio = std::max(0.75, std::min(1.35, base / prior));
-            verify_scale = 0.90 * verify_scale + 0.10 * ratio;
-        }
-    }
+    void update_verify_timing(int /*M*/, int /*anchor_pos*/, double /*verify_ms*/) noexcept {}
 
     void observe_pld_step(int anchor_pos, int32_t anchor_tok, int32_t first_cont, bool from_gen, int M, int n_emit, double verify_ms) noexcept {
         update_verify_timing(M, anchor_pos, verify_ms);
@@ -656,12 +644,8 @@ struct Ink5090DraftPolicy {
         double conf_pow,
         double draft_ms,
         double verify_ms) noexcept {
+        (void)draft_ms; (void)verify_ms;   // measured times are not used (deterministic cost model, see above)
         ++draft_calls;
-        if (draft_calls >= 3 && draft_ms > 0.25 && draft_ms < 8.0) {
-            const double cd = std::max(0.45, std::min(2.50, draft_ms));
-            ema_draft_ms = 0.85 * ema_draft_ms + 0.15 * cd;
-        }
-        update_verify_timing(M, anchor_pos, verify_ms);
 
         // Exact censored survival log-space power calibration on ONLY the tested DFlash 2 main-chain tokens!
         const int n_acc = std::max(0, n_emit - 1);
@@ -680,7 +664,7 @@ struct Ink5090DraftPolicy {
         const double p_c = std::max(0.18, std::min(0.92, obs_pred_ema));
         cal_alpha = std::max(0.98, std::min(1.45, std::log(a_c) / std::log(p_c)));
 
-        const double eff_step_ms = std::max(ema_draft_ms, std::min(3.0, draft_ms)) + t_verify_ms(M, anchor_pos);
+        const double eff_step_ms = ema_draft_ms + t_verify_ms(M, anchor_pos);
         const double rate = (double)n_emit / eff_step_ms;
         ema_df2_rate = 0.82 * ema_df2_rate + 0.18 * rate;
 
@@ -709,6 +693,13 @@ struct Ink5090DraftPolicy {
         }
 
         expected_next_pos = anchor_pos + n_emit;
+    }
+
+    // STRATA_INK_SPEC_LOG=1: the live timing state, one line (used to calibrate the fixed cost table)
+    void log_state() const {
+        std::fprintf(stderr, "[5090-DPOL-STATE] plain_base=%.3f draft=%.3f vscale=%.3f df2_rate=%.3f verify_obs(M=2..16):", ema_plain_base_ms, ema_draft_ms, verify_scale, ema_df2_rate);
+        for (int m = 2; m <= 16; ++m) std::fprintf(stderr, " %.2f/%u", obs_verify_ms[m], m_calls[m]);
+        std::fprintf(stderr, "\n");
     }
 };
 

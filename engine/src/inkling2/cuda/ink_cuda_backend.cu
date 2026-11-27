@@ -1871,6 +1871,7 @@ public:
                                  dp_d / dp_steps, dp_v / dp_steps, dp_a / dp_steps, dp_c / dp_steps,
                                  dpol5090_.cal_alpha, dpol5090_.ema_gain_tok);
                 }
+                if (dp_steps % 100 == 0) dpol5090_.log_state();
             }
             tree_snap_ready_ = true;
             tree_snap_p0_ = anchor_pos;
