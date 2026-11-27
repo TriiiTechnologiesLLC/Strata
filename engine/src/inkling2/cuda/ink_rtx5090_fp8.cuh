@@ -680,13 +680,12 @@ __global__ void __launch_bounds__(256) k_ink_gemv_multi_fp8_smallM_l1(
     const __half2* __restrict__ Xh_k,  // [M, K/2] (nullable -> Xh_q)
     const __half2* __restrict__ Xh_v,  // [M, K/2] (nullable -> Xh_q)
     int M, int K) {
-    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int tid   = threadIdx.x;
     const int warp  = tid >> 5;
     const int lane  = tid & 31;
     const int grow0 = blockIdx.x * 8;
     const int grow  = grow0 + warp;
-    if (grow >= mp.cumN[mp.count]) return;
+    if (grow >= mp.cumN[mp.count]) { INK_PDL_WAIT(); return; }
 
     int pi = 0;
     while (pi + 1 < mp.count && grow0 >= mp.cumN[pi + 1]) ++pi;
@@ -697,14 +696,33 @@ __global__ void __launch_bounds__(256) k_ink_gemv_multi_fp8_smallM_l1(
     const int k16_end = K >> 4;
     const int k2 = K >> 1;
 
+    // Stage constant FP8 weight row BEFORE INK_PDL_WAIT() so weight DRAM reads overlap the upstream kernel tail!
+    uint4 wv0 = make_uint4(0u, 0u, 0u, 0u), wv1 = wv0, wv2 = wv0, wv3 = wv0, wv4 = wv0, wv5 = wv0;
+    bool has4 = false;
+    if (k16_end == 144) {
+        wv0 = __ldg(wr + lane + 0);
+        wv1 = __ldg(wr + lane + 32);
+        wv2 = __ldg(wr + lane + 64);
+        wv3 = __ldg(wr + lane + 96);
+        has4 = (lane < 16);
+        if (has4) wv4 = __ldg(wr + lane + 128);
+    } else if (k16_end == 192) {
+        wv0 = __ldg(wr + lane + 0);
+        wv1 = __ldg(wr + lane + 32);
+        wv2 = __ldg(wr + lane + 64);
+        wv3 = __ldg(wr + lane + 96);
+        wv4 = __ldg(wr + lane + 128);
+        wv5 = __ldg(wr + lane + 160);
+    }
+    INK_PDL_WAIT();
+
     __half2 acc0[MAX_M], acc1[MAX_M];
 #pragma unroll
     for (int m = 0; m < MAX_M; ++m) {
         acc0[m] = __float2half2_rn(0.0f);
         acc1[m] = __float2half2_rn(0.0f);
     }
-    for (int k16 = lane; k16 < k16_end; k16 += 32) {
-        const uint4 wv = __ldg(wr + k16);
+    auto accum_u4 = [&](const uint4& wv, int k16) {
         const __half2 w0 = fp8x2_to_h2((uint16_t)(wv.x & 0xFFFFu));
         const __half2 w1 = fp8x2_to_h2((uint16_t)(wv.x >> 16));
         const __half2 w2 = fp8x2_to_h2((uint16_t)(wv.y & 0xFFFFu));
@@ -729,6 +747,22 @@ __global__ void __launch_bounds__(256) k_ink_gemv_multi_fp8_smallM_l1(
                 acc1[m] = __hfma2(w7, *reinterpret_cast<const __half2*>(&xb.w), acc1[m]);
             }
         }
+    };
+    if (k16_end == 144) {
+        accum_u4(wv0, lane + 0);
+        accum_u4(wv1, lane + 32);
+        accum_u4(wv2, lane + 64);
+        accum_u4(wv3, lane + 96);
+        if (has4) accum_u4(wv4, lane + 128);
+    } else if (k16_end == 192) {
+        accum_u4(wv0, lane + 0);
+        accum_u4(wv1, lane + 32);
+        accum_u4(wv2, lane + 64);
+        accum_u4(wv3, lane + 96);
+        accum_u4(wv4, lane + 128);
+        accum_u4(wv5, lane + 160);
+    } else {
+        for (int k16 = lane; k16 < k16_end; k16 += 32) accum_u4(__ldg(wr + k16), k16);
     }
     float* Yp = mp.Y[pi];
     const int Np = mp.N[pi];

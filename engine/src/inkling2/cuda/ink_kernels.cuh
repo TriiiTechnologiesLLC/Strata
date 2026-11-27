@@ -828,6 +828,7 @@ __global__ void __launch_bounds__(128) k_ink_moe_reduce8_sconv_tree(
     int ch_off,
     float* __restrict__ cur_io,           // [M, 2304]
     int M) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int tid = threadIdx.x;
     const int c = blockIdx.x * 128 + tid;
     if (c >= kInkHidden) return;
@@ -1110,6 +1111,7 @@ __global__ void __launch_bounds__(256) k_ink_sconv4_tree(
     int C,
     int n_heads,
     bool add_to_out = false) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int m = blockIdx.y;
     const int c = blockIdx.x * 256 + threadIdx.x;
     if (m >= M || c >= C) return;

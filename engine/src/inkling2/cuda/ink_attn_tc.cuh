@@ -23,6 +23,7 @@
 #pragma once
 
 #include "ink_attn.cuh"
+#include "ink_pdl_dev.cuh"
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <cstdint>
@@ -275,6 +276,7 @@ __global__ void __launch_bounds__(128, 2) k_ink_attn_tc(
     float* __restrict__ part_l,
     float* __restrict__ part_o,           // [M, 24, nsp + 1, 128]
     int M, int rows_per_cta, int nslab, int nsp) {
+    INK_PDL_WAIT();
     extern __shared__ __align__(16) unsigned char smem_raw[];
     auto& sm = *reinterpret_cast<TcSmem<NBUF>*>(smem_raw);
     const bool tree = (tree_k != nullptr);
@@ -489,6 +491,7 @@ template <bool H2>
 __global__ void __launch_bounds__(128) k_ink_tc_merge(
     const float* __restrict__ part_m, const float* __restrict__ part_l, const float* __restrict__ part_o, const float* __restrict__ gate_attn,
     float* __restrict__ out, __half2* __restrict__ out_h2, const int32_t* __restrict__ q_pos, bool tree, int chain_k, int flags, int cap_pos, int M, int nsp) {
+    INK_PDL_WAIT();
     const int h = blockIdx.x, m = blockIdx.y, d = threadIdx.x;
     if (h >= kInkHeads || m >= M) return;
     int nc = ((flags & kFlagBlockTail) || chain_k <= 0) ? (tree ? q_pos[0] : (q_pos[m] + 1)) : q_pos[m - m % chain_k];

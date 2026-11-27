@@ -105,13 +105,16 @@ inline bool name_listed(const char* name, const char* list) {
     }
     return false;
 }
-template <typename... A>
-inline void add_named(const char* name, void (*k)(A...)) {
+inline void add_raw(const char* name, const void* fn) {
     const char* skip = std::getenv("STRATA_INK_PDL_SKIP");
     const char* only = std::getenv("STRATA_INK_PDL_ONLY");
     if (skip != nullptr && *skip != '\0' && name_listed(name, skip)) return;
     if (only != nullptr && *only != '\0' && !name_listed(name, only)) return;
-    reg().fns.insert(reinterpret_cast<const void*>(k));
+    reg().fns.insert(fn);
+}
+template <typename... A>
+inline void add_named(const char* name, void (*k)(A...)) {
+    add_raw(name, reinterpret_cast<const void*>(k));
 }
 
 inline void register_all();   // defined in ink_pdl_kernels.cuh, after every kernel is declared

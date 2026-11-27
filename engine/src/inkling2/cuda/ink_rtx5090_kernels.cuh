@@ -616,6 +616,7 @@ __global__ void __launch_bounds__(256) k_ink_attn_res_3x_fused_1cta(
     int M, int D,
     uint8_t* __restrict__ cat3_fp8_out = nullptr, // [3, M_pad, 2*D] FP8 (scale=0.125f, nullable)
     int M_pad = 0) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int m = blockIdx.x;
     const int tid = threadIdx.x;
     const int D4 = D >> 2;
@@ -1597,6 +1598,7 @@ __global__ void __launch_bounds__(128) k_ink_flash_gqa_splitk_deep(
     float* __restrict__ part_o,
     int M,
     int n_splits = kInkAttnSplits) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int kh = blockIdx.x;
     const int sp = blockIdx.y;
     const int m  = blockIdx.z;
@@ -1687,6 +1689,153 @@ __global__ void __launch_bounds__(128) k_ink_flash_gqa_splitk_deep(
             float w3 = sm_l[3] > 0.0f ? __expf(sm_m[3] - mg) : 0.0f;
             const float lt = sm_l[0] * w0 + sm_l[1] * w1 + sm_l[2] * w2 + sm_l[3] * w3;
             const size_t idx_sp = ((size_t)m * kInkHeads + h0 + r) * n_splits + sp;
+            if (lane == 0) { part_m[idx_sp] = mg; part_l[idx_sp] = lt; }
+            *(float4*)(part_o + idx_sp * kInkHeadDim + lane * 4) = make_float4(
+                sm_a[0][lane * 4 + 0] * w0 + sm_a[1][lane * 4 + 0] * w1 + sm_a[2][lane * 4 + 0] * w2 + sm_a[3][lane * 4 + 0] * w3,
+                sm_a[0][lane * 4 + 1] * w0 + sm_a[1][lane * 4 + 1] * w1 + sm_a[2][lane * 4 + 1] * w2 + sm_a[3][lane * 4 + 1] * w3,
+                sm_a[0][lane * 4 + 2] * w0 + sm_a[1][lane * 4 + 2] * w1 + sm_a[2][lane * 4 + 2] * w2 + sm_a[3][lane * 4 + 2] * w3,
+                sm_a[0][lane * 4 + 3] * w0 + sm_a[1][lane * 4 + 3] * w1 + sm_a[2][lane * 4 + 3] * w2 + sm_a[3][lane * 4 + 3] * w3);
+        }
+        __syncthreads();
+    }
+}
+
+// Shared-KV Multi-Row SWA Tree Verify Attention (reads the 512-token SWA KV window ONCE per 8 tree rows instead of M times!)
+// Grid: dim3(kInkHeads, n_splits, (M + 7) / 8), Block: 128 (4 warps/CTA, 1 Q-head/CTA -> zero register spills!)
+__global__ void __launch_bounds__(128) k_ink_flash_swa_tree_shared(
+    const float* __restrict__ q,             // [M, 24, 128]
+    const float* __restrict__ rel_table,     // [M, 24, 1025]
+    const float* __restrict__ sinks,         // [M, 24]
+    InkKvVisitDesc kv,
+    int slot0,
+    const int32_t* __restrict__ q_pos,
+    const float* __restrict__ tree_k,
+    const float* __restrict__ tree_v,
+    const uint8_t* __restrict__ tree_anc32,  // [M, 32]
+    const uint8_t* __restrict__ tree_dep,    // [M]
+    float* __restrict__ part_m,
+    float* __restrict__ part_l,
+    float* __restrict__ part_o,
+    int M,
+    int n_splits) {
+    INK_PDL_WAIT();
+    const int h      = blockIdx.x;
+    const int sp     = blockIdx.y;
+    const int m_base = blockIdx.z * 8;
+    if (h >= kInkHeads || sp >= n_splits || m_base >= M) return;
+
+    const int kh   = h / 3;
+    const int n_m  = min(8, M - m_base);
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    constexpr float scale = 0.08838834764831845f;
+
+    __shared__ alignas(16) float s_q[8][kInkHeadDim];
+    __shared__ int s_qp[8];
+    __shared__ int s_dep[8];
+
+    if (tid < n_m) {
+        s_qp[tid]  = q_pos[m_base + tid];
+        s_dep[tid] = (int)tree_dep[m_base + tid];
+    }
+    for (int r = warp; r < n_m; r += 4) {
+        const float4 qv = *(const float4*)(q + ((size_t)(m_base + r) * kInkHeads + h) * kInkHeadDim + lane * 4);
+        *(float4*)(&s_q[r][lane * 4]) = qv;
+    }
+    __syncthreads();
+
+    const int tp0 = q_pos[0];
+    int min_qp = s_qp[0];
+    for (int r = 1; r < n_m; ++r) min_qp = min(min_qp, s_qp[r]);
+    const int k_lo    = max(0, min_qp - kInkSwaWin + 1);
+    const int k_len   = max(0, tp0 - k_lo);
+    const int per_sp  = (k_len + n_splits - 1) / n_splits;
+    const int s_beg   = k_lo + sp * per_sp;
+    const int s_end   = min(tp0, s_beg + per_sp);
+
+    float mw[8], lw[8], a[8][4];
+#pragma unroll
+    for (int r = 0; r < 8; ++r) {
+        const bool init_sink = (r < n_m && sp == 0 && warp == 0);
+        mw[r] = init_sink ? sinks[(size_t)(m_base + r) * kInkHeads + h] : -1e30f;
+        lw[r] = init_sink ? 1.0f : 0.0f;
+        a[r][0] = 0.0f; a[r][1] = 0.0f; a[r][2] = 0.0f; a[r][3] = 0.0f;
+    }
+
+    // 1. Shared SWA prefix [s_beg .. s_end): each KV cell loaded ONCE and scored against all n_m tree rows!
+    for (int kp = s_beg + warp; kp < s_end; kp += 4) {
+        float4 kv4, vv4;
+        ink_kv_load4(kv, slot0, kp % kv.cap_pos, kh, lane, kv4, vv4);
+#pragma unroll
+        for (int r = 0; r < 8; ++r) {
+            if (r < n_m) {
+                const int dist = s_qp[r] - kp;
+                if (dist >= 0 && dist < kInkSwaWin) {
+                    const float4 qv = *(const float4*)(&s_q[r][lane * 4]);
+                    const float* rt = rel_table + ((size_t)(m_base + r) * kInkHeads + h) * (kInkRelExtent + 1);
+                    const float sc = warp_sum(qv.x * kv4.x + qv.y * kv4.y + qv.z * kv4.z + qv.w * kv4.w) * scale
+                                   + rt[min(dist, kInkRelExtent)];
+                    const float mn = fmaxf(mw[r], sc);
+                    const float al = (mw[r] > -1e29f) ? __expf(mw[r] - mn) : 0.0f;
+                    const float p  = __expf(sc - mn);
+                    lw[r]   = lw[r] * al + p;
+                    a[r][0] = a[r][0] * al + p * vv4.x;
+                    a[r][1] = a[r][1] * al + p * vv4.y;
+                    a[r][2] = a[r][2] * al + p * vv4.z;
+                    a[r][3] = a[r][3] * al + p * vv4.w;
+                    mw[r]   = mn;
+                }
+            }
+        }
+    }
+
+    // 2. Exact ancestor tree tail [tp0 .. qp] on split 0
+    if (sp == 0 && tree_k != nullptr) {
+        for (int r = 0; r < n_m; ++r) {
+            const int dep = s_dep[r];
+            const int qp  = s_qp[r];
+            const float4 qv = *(const float4*)(&s_q[r][lane * 4]);
+            const float* rt = rel_table + ((size_t)(m_base + r) * kInkHeads + h) * (kInkRelExtent + 1);
+            const uint8_t* anc_row = tree_anc32 + (size_t)(m_base + r) * kInkMaxTree;
+            for (int d = warp; d <= dep; d += 4) {
+                const int kp = tp0 + d;
+                const int dist = qp - kp;
+                if (dist >= 0 && dist < kInkSwaWin) {
+                    const int anc_node = (int)anc_row[d];
+                    const size_t tbase = ((size_t)anc_node * kInkKVHeads + kh) * kInkHeadDim + lane * 4;
+                    const float4 kv4 = *(const float4*)(tree_k + tbase);
+                    const float4 vv4 = *(const float4*)(tree_v + tbase);
+                    const float sc = warp_sum(qv.x * kv4.x + qv.y * kv4.y + qv.z * kv4.z + qv.w * kv4.w) * scale
+                                   + rt[min(dist, kInkRelExtent)];
+                    const float mn = fmaxf(mw[r], sc);
+                    const float al = (mw[r] > -1e29f) ? __expf(mw[r] - mn) : 0.0f;
+                    const float p  = __expf(sc - mn);
+                    lw[r]   = lw[r] * al + p;
+                    a[r][0] = a[r][0] * al + p * vv4.x;
+                    a[r][1] = a[r][1] * al + p * vv4.y;
+                    a[r][2] = a[r][2] * al + p * vv4.z;
+                    a[r][3] = a[r][3] * al + p * vv4.w;
+                    mw[r]   = mn;
+                }
+            }
+        }
+    }
+
+    __shared__ float sm_m[4], sm_l[4], sm_a[4][kInkHeadDim];
+    for (int r = 0; r < n_m; ++r) {
+        if (lane == 0) { sm_m[warp] = mw[r]; sm_l[warp] = lw[r]; }
+        sm_a[warp][lane * 4 + 0] = a[r][0]; sm_a[warp][lane * 4 + 1] = a[r][1];
+        sm_a[warp][lane * 4 + 2] = a[r][2]; sm_a[warp][lane * 4 + 3] = a[r][3];
+        __syncthreads();
+        if (warp == 0) {
+            const float mg = fmaxf(fmaxf(sm_m[0], sm_m[1]), fmaxf(sm_m[2], sm_m[3]));
+            const float w0 = sm_l[0] > 0.0f ? __expf(sm_m[0] - mg) : 0.0f;
+            const float w1 = sm_l[1] > 0.0f ? __expf(sm_m[1] - mg) : 0.0f;
+            const float w2 = sm_l[2] > 0.0f ? __expf(sm_m[2] - mg) : 0.0f;
+            const float w3 = sm_l[3] > 0.0f ? __expf(sm_m[3] - mg) : 0.0f;
+            const float lt = sm_l[0] * w0 + sm_l[1] * w1 + sm_l[2] * w2 + sm_l[3] * w3;
+            const size_t idx_sp = ((size_t)(m_base + r) * kInkHeads + h) * n_splits + sp;
             if (lane == 0) { part_m[idx_sp] = mg; part_l[idx_sp] = lt; }
             *(float4*)(part_o + idx_sp * kInkHeadDim + lane * 4) = make_float4(
                 sm_a[0][lane * 4 + 0] * w0 + sm_a[1][lane * 4 + 0] * w1 + sm_a[2][lane * 4 + 0] * w2 + sm_a[3][lane * 4 + 0] * w3,
@@ -2797,6 +2946,7 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_gu(
     InkMoeTables tb,
     const __half2* __restrict__ x_h2,      // [M, 1152] pre-converted!
     __half2* __restrict__ h_h2_out) {      // [P, 576] output directly in __half2 for DN!
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int ai = blockIdx.y;
     if (ai >= *tb.nact) return;
     const int e = tb.active[ai];
@@ -2823,25 +2973,22 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_gu(
     const uint16_t* gs2 = valid_feat ? reinterpret_cast<const uint16_t*>(base_s + (size_t)(2 * feat) * W_S_ROW) : nullptr;
     const uint16_t* us2 = valid_feat ? reinterpret_cast<const uint16_t*>(base_s + (size_t)(2 * feat + 1) * W_S_ROW) : nullptr;
 
-    __shared__ alignas(16) __half2 s_x[8][kInkHidden / 2];  // 36 KB
+    __shared__ int32_t s_tok[8];  // 32 B smem (vs 36 KB!) -> 6 CTAs/SM = 1,536 threads/SM = 100% SM occupancy, x_h2 (<28 KB) pinned in 128 KB L1!
 
     for (int off_m = 0; off_m < n_total; off_m += 8) {
         const int n_e = min(8, n_total - off_m);
-        for (int m = 0; m < n_e; ++m) {
-            const uint4* src4 = reinterpret_cast<const uint4*>(x_h2 + (size_t)tb.tok_idx[row0 + off_m + m] * (kInkHidden / 2));
-            uint4* dst4 = reinterpret_cast<uint4*>(s_x[m]);
-            for (int i = tid; i < (kInkHidden / 8); i += 256) dst4[i] = src4[i];
-        }
+        if (tid < n_e) s_tok[tid] = tb.tok_idx[row0 + off_m + tid];
         __syncthreads();
 
         if (valid_feat) {
             if (n_e == 1) {
+                const __half2* x_r0 = x_h2 + (size_t)s_tok[0] * (kInkHidden / 2);
                 float ag = 0.0f, au = 0.0f;
                 auto proc1 = [&](const uint4& gv, const uint4& uv, uint16_t gs_r, uint16_t us_r, int idx) {
                     const float2 sg = e4m3x2_to_f32x2(gs_r);
                     const float2 su = e4m3x2_to_f32x2(us_r);
                     __half2 gw[8], uw[8];
-                    const __half2* xh0 = s_x[0] + idx * 16;
+                    const __half2* xh0 = x_r0 + idx * 16;
                     sf4_decode16_h2(gv.x, gv.y, gw);
                     sf4_decode16_h2(uv.x, uv.y, uw);
                     ag = fmaf(dot16_h2_2acc(gw, xh0), sg.x, ag);
@@ -2881,18 +3028,23 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_gu(
                     h_h2_out[(size_t)(row0 + off_m) * (kInkInter / 2) + (feat >> 1)] = __floats2half2_rn(hv, hv_odd);
                 }
             } else if (n_e <= 4) {
+                const __half2* x_r[4] = {
+                    x_h2 + (size_t)s_tok[0] * (kInkHidden / 2),
+                    (n_e > 1) ? (x_h2 + (size_t)s_tok[1] * (kInkHidden / 2)) : nullptr,
+                    (n_e > 2) ? (x_h2 + (size_t)s_tok[2] * (kInkHidden / 2)) : nullptr,
+                    (n_e > 3) ? (x_h2 + (size_t)s_tok[3] * (kInkHidden / 2)) : nullptr
+                };
                 float ag[4] = {}, au[4] = {};
-                for (int i = lg; i < 72; i += 16) {
-                    const uint4 gv = __ldg(gp16 + i), uv = __ldg(up16 + i);
-                    const float2 sg = e4m3x2_to_f32x2(__ldg(gs2 + i));
-                    const float2 su = e4m3x2_to_f32x2(__ldg(us2 + i));
+                auto step4 = [&](const uint4& gv, const uint4& uv, uint16_t gsr, uint16_t usr, int idx) {
+                    const float2 sg = e4m3x2_to_f32x2(gsr);
+                    const float2 su = e4m3x2_to_f32x2(usr);
                     __half2 gw[8], uw[8];
                     sf4_decode16_h2(gv.x, gv.y, gw);
                     sf4_decode16_h2(uv.x, uv.y, uw);
 #pragma unroll
                     for (int m = 0; m < 4; ++m) {
                         if (m < n_e) {
-                            const __half2* xh = s_x[m] + i * 16;
+                            const __half2* xh = x_r[m] + idx * 16;
                             ag[m] = fmaf(dot16_h2_2acc(gw, xh), sg.x, ag[m]);
                             au[m] = fmaf(dot16_h2_2acc(uw, xh), su.x, au[m]);
                         }
@@ -2902,12 +3054,30 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_gu(
 #pragma unroll
                     for (int m = 0; m < 4; ++m) {
                         if (m < n_e) {
-                            const __half2* xh = s_x[m] + i * 16 + 8;
+                            const __half2* xh = x_r[m] + idx * 16 + 8;
                             ag[m] = fmaf(dot16_h2_2acc(gw, xh), sg.y, ag[m]);
                             au[m] = fmaf(dot16_h2_2acc(uw, xh), su.y, au[m]);
                         }
                     }
-                }
+                };
+                const uint4 g0 = __ldg(gp16 + lg + 0),  u0 = __ldg(up16 + lg + 0);
+                const uint4 g1 = __ldg(gp16 + lg + 16), u1 = __ldg(up16 + lg + 16);
+                const uint16_t gs0 = __ldg(gs2 + lg + 0),  us0 = __ldg(us2 + lg + 0);
+                const uint16_t gs1 = __ldg(gs2 + lg + 16), us1 = __ldg(us2 + lg + 16);
+                const uint4 g2 = __ldg(gp16 + lg + 32), u2 = __ldg(up16 + lg + 32);
+                const uint16_t gs2v = __ldg(gs2 + lg + 32), us2v = __ldg(us2 + lg + 32);
+                step4(g0, u0, gs0, us0, lg + 0);
+                const uint4 g3 = __ldg(gp16 + lg + 48), u3 = __ldg(up16 + lg + 48);
+                const uint16_t gs3 = __ldg(gs2 + lg + 48), us3 = __ldg(us2 + lg + 48);
+                step4(g1, u1, gs1, us1, lg + 16);
+                const bool has4 = (lg < 8);
+                const uint4 g4 = has4 ? __ldg(gp16 + lg + 64) : make_uint4(0u, 0u, 0u, 0u);
+                const uint4 u4 = has4 ? __ldg(up16 + lg + 64) : make_uint4(0u, 0u, 0u, 0u);
+                const uint16_t gs4 = has4 ? __ldg(gs2 + lg + 64) : 0u;
+                const uint16_t us4 = has4 ? __ldg(us2 + lg + 64) : 0u;
+                step4(g2, u2, gs2v, us2v, lg + 32);
+                step4(g3, u3, gs3, us3, lg + 48);
+                if (has4) step4(g4, u4, gs4, us4, lg + 64);
 #pragma unroll
                 for (int m = 0; m < 4; ++m) {
                     if (m < n_e) {
@@ -2926,31 +3096,38 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_gu(
                 }
             } else {
                 float ag[8] = {}, au[8] = {};
+                uint4 gv_cur = __ldg(gp16 + lg), uv_cur = __ldg(up16 + lg);
+                uint16_t gs_cur = __ldg(gs2 + lg), us_cur = __ldg(us2 + lg);
                 for (int i = lg; i < 72; i += 16) {
-                    const uint4 gv = __ldg(gp16 + i), uv = __ldg(up16 + i);
-                    const float2 sg = e4m3x2_to_f32x2(__ldg(gs2 + i));
-                    const float2 su = e4m3x2_to_f32x2(__ldg(us2 + i));
+                    const int nxt = i + 16;
+                    const uint4 gv_nxt = (nxt < 72) ? __ldg(gp16 + nxt) : make_uint4(0u, 0u, 0u, 0u);
+                    const uint4 uv_nxt = (nxt < 72) ? __ldg(up16 + nxt) : make_uint4(0u, 0u, 0u, 0u);
+                    const uint16_t gs_nxt = (nxt < 72) ? __ldg(gs2 + nxt) : 0u;
+                    const uint16_t us_nxt = (nxt < 72) ? __ldg(us2 + nxt) : 0u;
+                    const float2 sg = e4m3x2_to_f32x2(gs_cur);
+                    const float2 su = e4m3x2_to_f32x2(us_cur);
                     __half2 gw[8], uw[8];
-                    sf4_decode16_h2(gv.x, gv.y, gw);
-                    sf4_decode16_h2(uv.x, uv.y, uw);
+                    sf4_decode16_h2(gv_cur.x, gv_cur.y, gw);
+                    sf4_decode16_h2(uv_cur.x, uv_cur.y, uw);
 #pragma unroll
                     for (int m = 0; m < 8; ++m) {
                         if (m < n_e) {
-                            const __half2* xh = s_x[m] + i * 16;
+                            const __half2* xh = x_h2 + (size_t)s_tok[m] * (kInkHidden / 2) + i * 16;
                             ag[m] = fmaf(dot16_h2_2acc(gw, xh), sg.x, ag[m]);
                             au[m] = fmaf(dot16_h2_2acc(uw, xh), su.x, au[m]);
                         }
                     }
-                    sf4_decode16_h2(gv.z, gv.w, gw);
-                    sf4_decode16_h2(uv.z, uv.w, uw);
+                    sf4_decode16_h2(gv_cur.z, gv_cur.w, gw);
+                    sf4_decode16_h2(uv_cur.z, uv_cur.w, uw);
 #pragma unroll
                     for (int m = 0; m < 8; ++m) {
                         if (m < n_e) {
-                            const __half2* xh = s_x[m] + i * 16 + 8;
+                            const __half2* xh = x_h2 + (size_t)s_tok[m] * (kInkHidden / 2) + i * 16 + 8;
                             ag[m] = fmaf(dot16_h2_2acc(gw, xh), sg.y, ag[m]);
                             au[m] = fmaf(dot16_h2_2acc(uw, xh), su.y, au[m]);
                         }
                     }
+                    gv_cur = gv_nxt; uv_cur = uv_nxt; gs_cur = gs_nxt; us_cur = us_nxt;
                 }
 #pragma unroll
                 for (int m = 0; m < 8; ++m) {
@@ -2981,6 +3158,7 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_dn(
     const __half2* __restrict__ h_h2,      // [P, 576]
     const float* __restrict__ topk_w,
     float* __restrict__ y_pair) {          // [P, 2304]
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int ai = blockIdx.y;
     if (ai >= *tb.nact) return;
     const int e = tb.active[ai];
@@ -3007,21 +3185,16 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_dn(
     const uint16_t* s0 = valid_r ? reinterpret_cast<const uint16_t*>(base_s + (size_t)(2 * pair_r) * W_S_ROW) : nullptr;
     const uint16_t* s1 = valid_r ? reinterpret_cast<const uint16_t*>(base_s + (size_t)(2 * pair_r + 1) * W_S_ROW) : nullptr;
 
-    __shared__ alignas(16) __half2 s_h[8][kInkInter / 2];  // 18 KB
     __shared__ float s_rw[8];
-    __shared__ int32_t s_pair[8];
+    __shared__ int32_t s_pair[8];  // 64 B smem (vs 18 KB!) -> 6 CTAs/SM = 100% occupancy!
 
     for (int off_m = 0; off_m < n_total; off_m += 8) {
         const int n_e = min(8, n_total - off_m);
+        const __half2* h_base = h_h2 + (size_t)(row0 + off_m) * (kInkInter / 2);
         if (tid < n_e) {
             const int pr = tb.pairs[row0 + off_m + tid];
             s_pair[tid] = pr;
             s_rw[tid]   = topk_w[pr] * w_outer;
-        }
-        for (int m = 0; m < n_e; ++m) {
-            const uint4* src4 = reinterpret_cast<const uint4*>(h_h2 + (size_t)(row0 + off_m + m) * (kInkInter / 2));
-            uint4* dst4 = reinterpret_cast<uint4*>(s_h[m]);
-            for (int i = tid; i < (kInkInter / 8); i += 256) dst4[i] = src4[i];
         }
         __syncthreads();
 
@@ -3032,7 +3205,7 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_dn(
                     const float2 sc0 = e4m3x2_to_f32x2(sr0);
                     const float2 sc1 = e4m3x2_to_f32x2(sr1);
                     __half2 w0[8], w1[8];
-                    const __half2* hh = s_h[0] + idx * 16;
+                    const __half2* hh = h_base + idx * 16;
                     sf4_decode16_h2(v0.x, v0.y, w0);
                     sf4_decode16_h2(v1.x, v1.y, w1);
                     y0 = fmaf(dot16_h2_2acc(w0, hh), sc0.x, y0);
@@ -3067,17 +3240,16 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_dn(
                 }
             } else if (n_e <= 4) {
                 float y0[4] = {}, y1[4] = {};
-                for (int i = lg; i < 36; i += 16) {
-                    const uint4 v0 = __ldg(p0 + i), v1 = __ldg(p1 + i);
-                    const float2 sc0 = e4m3x2_to_f32x2(__ldg(s0 + i));
-                    const float2 sc1 = e4m3x2_to_f32x2(__ldg(s1 + i));
+                auto step_dn4 = [&](const uint4& v0, const uint4& v1, uint16_t sr0, uint16_t sr1, int idx) {
+                    const float2 sc0 = e4m3x2_to_f32x2(sr0);
+                    const float2 sc1 = e4m3x2_to_f32x2(sr1);
                     __half2 w0[8], w1[8];
                     sf4_decode16_h2(v0.x, v0.y, w0);
                     sf4_decode16_h2(v1.x, v1.y, w1);
 #pragma unroll
                     for (int m = 0; m < 4; ++m) {
                         if (m < n_e) {
-                            const __half2* hh = s_h[m] + i * 16;
+                            const __half2* hh = h_base + (size_t)m * (kInkInter / 2) + idx * 16;
                             y0[m] = fmaf(dot16_h2_2acc(w0, hh), sc0.x, y0[m]);
                             y1[m] = fmaf(dot16_h2_2acc(w1, hh), sc1.x, y1[m]);
                         }
@@ -3087,42 +3259,62 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_dn(
 #pragma unroll
                     for (int m = 0; m < 4; ++m) {
                         if (m < n_e) {
-                            const __half2* hh = s_h[m] + i * 16 + 8;
+                            const __half2* hh = h_base + (size_t)m * (kInkInter / 2) + idx * 16 + 8;
                             y0[m] = fmaf(dot16_h2_2acc(w0, hh), sc0.y, y0[m]);
                             y1[m] = fmaf(dot16_h2_2acc(w1, hh), sc1.y, y1[m]);
                         }
                     }
-                }
+                };
+                const uint4 a0 = __ldg(p0 + lg + 0),  b0 = __ldg(p1 + lg + 0);
+                const uint4 a1 = __ldg(p0 + lg + 16), b1 = __ldg(p1 + lg + 16);
+                const uint16_t sa0 = __ldg(s0 + lg + 0),  sb0 = __ldg(s1 + lg + 0);
+                const uint16_t sa1 = __ldg(s0 + lg + 16), sb1 = __ldg(s1 + lg + 16);
+                const bool has2 = (lg < 4);
+                const uint4 a2 = has2 ? __ldg(p0 + lg + 32) : make_uint4(0u, 0u, 0u, 0u);
+                const uint4 b2 = has2 ? __ldg(p1 + lg + 32) : make_uint4(0u, 0u, 0u, 0u);
+                const uint16_t sa2 = has2 ? __ldg(s0 + lg + 32) : 0u;
+                const uint16_t sb2 = has2 ? __ldg(s1 + lg + 32) : 0u;
+                step_dn4(a0, b0, sa0, sb0, lg + 0);
+                step_dn4(a1, b1, sa1, sb1, lg + 16);
+                if (has2) step_dn4(a2, b2, sa2, sb2, lg + 32);
 #pragma unroll
                 for (int m = 0; m < 4; ++m) {
                     if (m < n_e) {
-                        float a0 = y0[m], a1 = y1[m];
+                        float r0 = y0[m], r1 = y1[m];
 #pragma unroll
                         for (int o = 8; o >= 1; o >>= 1) {
-                            a0 += __shfl_xor_sync(0xFFFFFFFFu, a0, o);
-                            a1 += __shfl_xor_sync(0xFFFFFFFFu, a1, o);
+                            r0 += __shfl_xor_sync(0xFFFFFFFFu, r0, o);
+                            r1 += __shfl_xor_sync(0xFFFFFFFFu, r1, o);
                         }
                         if (lg == 0) {
                             const float rw = s_rw[m];
                             const int pr = s_pair[m];
-                            y_pair[(size_t)pr * kInkHidden + 2 * pair_r]     = a0 * rw;
-                            y_pair[(size_t)pr * kInkHidden + 2 * pair_r + 1] = a1 * rw;
+                            y_pair[(size_t)pr * kInkHidden + 2 * pair_r]     = r0 * rw;
+                            y_pair[(size_t)pr * kInkHidden + 2 * pair_r + 1] = r1 * rw;
                         }
                     }
                 }
             } else {
                 float y0[8] = {}, y1[8] = {};
-                for (int i = lg; i < 36; i += 16) {
-                    const uint4 v0 = __ldg(p0 + i), v1 = __ldg(p1 + i);
-                    const float2 sc0 = e4m3x2_to_f32x2(__ldg(s0 + i));
-                    const float2 sc1 = e4m3x2_to_f32x2(__ldg(s1 + i));
+                const uint4 a0 = __ldg(p0 + lg + 0),  b0 = __ldg(p1 + lg + 0);
+                const uint4 a1 = __ldg(p0 + lg + 16), b1 = __ldg(p1 + lg + 16);
+                const uint16_t sa0 = __ldg(s0 + lg + 0),  sb0 = __ldg(s1 + lg + 0);
+                const uint16_t sa1 = __ldg(s0 + lg + 16), sb1 = __ldg(s1 + lg + 16);
+                const bool has2 = (lg < 4);
+                const uint4 a2 = has2 ? __ldg(p0 + lg + 32) : make_uint4(0u, 0u, 0u, 0u);
+                const uint4 b2 = has2 ? __ldg(p1 + lg + 32) : make_uint4(0u, 0u, 0u, 0u);
+                const uint16_t sa2 = has2 ? __ldg(s0 + lg + 32) : 0u;
+                const uint16_t sb2 = has2 ? __ldg(s1 + lg + 32) : 0u;
+                auto step_dn8 = [&](const uint4& v0, const uint4& v1, uint16_t sr0, uint16_t sr1, int idx) {
+                    const float2 sc0 = e4m3x2_to_f32x2(sr0);
+                    const float2 sc1 = e4m3x2_to_f32x2(sr1);
                     __half2 w0[8], w1[8];
                     sf4_decode16_h2(v0.x, v0.y, w0);
                     sf4_decode16_h2(v1.x, v1.y, w1);
 #pragma unroll
                     for (int m = 0; m < 8; ++m) {
                         if (m < n_e) {
-                            const __half2* hh = s_h[m] + i * 16;
+                            const __half2* hh = h_base + (size_t)m * (kInkInter / 2) + idx * 16;
                             y0[m] = fmaf(dot16_h2_2acc(w0, hh), sc0.x, y0[m]);
                             y1[m] = fmaf(dot16_h2_2acc(w1, hh), sc1.x, y1[m]);
                         }
@@ -3132,12 +3324,15 @@ __global__ void __launch_bounds__(256) k_moe_sf4_grouped_reg_dn(
 #pragma unroll
                     for (int m = 0; m < 8; ++m) {
                         if (m < n_e) {
-                            const __half2* hh = s_h[m] + i * 16 + 8;
+                            const __half2* hh = h_base + (size_t)m * (kInkInter / 2) + idx * 16 + 8;
                             y0[m] = fmaf(dot16_h2_2acc(w0, hh), sc0.y, y0[m]);
                             y1[m] = fmaf(dot16_h2_2acc(w1, hh), sc1.y, y1[m]);
                         }
                     }
-                }
+                };
+                step_dn8(a0, b0, sa0, sb0, lg + 0);
+                step_dn8(a1, b1, sa1, sb1, lg + 16);
+                if (has2) step_dn8(a2, b2, sa2, sb2, lg + 32);
 #pragma unroll
                 for (int m = 0; m < 8; ++m) {
                     if (m < n_e) {
@@ -3317,6 +3512,45 @@ inline void transcode_mx8_to_sf4_inplace(ModelT& m, cudaStream_t st) {
 #endif
 }
 
+// 72-CTA x 32-thread (1 warp/CTA, 128 B coalesced) Tree-32 Fused Reduce8 + ShortConv4 + Stage + Residual Add (4x SM parallelism on RTX 5090, 100% bit-exact!)
+__global__ void __launch_bounds__(32) k_ink_moe_reduce8_sconv_tree_32(
+    const float* __restrict__ y_pair,     // [M, 8, 2304]
+    const float* __restrict__ static_w,   // [2304, 4]
+    const float* __restrict__ history,    // [3, 2304]
+    const int8_t* __restrict__ lag_idx,   // [M, 3]
+    float* __restrict__ stage_v,          // [tree_cap, kInkSconvCh]
+    int ch_off,
+    float* __restrict__ cur_io,           // [M, 2304]
+    int M) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
+    const int tid = threadIdx.x;
+    const int c = blockIdx.x * 32 + tid;
+    if (c >= kInkHidden) return;
+    __shared__ float s_x[kInkMaxTree][32];  // 4 KB shared mem, zero cross-lane reads!
+    for (int m = 0; m < M; ++m) {
+        const float* yp = y_pair + (size_t)m * kInkTopK * kInkHidden + c;
+        float s = 0.0f;
+#pragma unroll
+        for (int k = 0; k < kInkTopK; ++k) s += yp[(size_t)k * kInkHidden];
+        s_x[m][tid] = s;
+        if (stage_v) stage_v[(size_t)m * kInkSconvCh + ch_off + c] = s;
+    }
+    const float4 sw = reinterpret_cast<const float4*>(static_w)[c];
+    const float hc0 = history[0 * kInkHidden + c];
+    const float hc1 = history[1 * kInkHidden + c];
+    const float hc2 = history[2 * kInkHidden + c];
+    auto fetch = [&](int idx) -> float {
+        return (idx >= 0) ? s_x[idx][tid] : ((idx == -1) ? hc2 : ((idx == -2) ? hc1 : hc0));
+    };
+    for (int m = 0; m < M; ++m) {
+        const float h2 = fetch((int)lag_idx[m * 3 + 0]);
+        const float h1 = fetch((int)lag_idx[m * 3 + 1]);
+        const float h0 = fetch((int)lag_idx[m * 3 + 2]);
+        const float cur = s_x[m][tid];
+        cur_io[(size_t)m * kInkHidden + c] = ink_mlp_sconv_step(h0, h1, h2, cur, sw, cur_io[(size_t)m * kInkHidden + c]);
+    }
+}
+
 // Fused Split-K Merge + Dual F32/__half2 Output (eliminates 48 k_ink_f32_to_h2 launches before wo_ud!)
 __global__ void __launch_bounds__(128) k_ink_flash_gqa_merge_h2(
     const float* __restrict__ part_m,
@@ -3326,6 +3560,7 @@ __global__ void __launch_bounds__(128) k_ink_flash_gqa_merge_h2(
     float* __restrict__ out,
     __half2* __restrict__ out_h2,
     int M, int n_splits) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int h = blockIdx.x;
     const int m = blockIdx.y;
     const int d = threadIdx.x;
@@ -3357,28 +3592,33 @@ __global__ void __launch_bounds__(128) k_ink_flash_gqa_merge_h2(
 }
 
 // High-BW FP16 Router GEMV for M <= 16 (2x less bandwidth than F32 + vectorized __hfma2 + 128 CTAs x 128 threads!)
+// Stages ALL 288 uint4s (4.6 KB/expert) of constant router weights BEFORE INK_PDL_WAIT()!
 template <int MAX_M>
 __global__ void __launch_bounds__(128) k_ink_router_gemv_fp16(
     const float* __restrict__ x_f32,          // [M, 2304]
     const __half2* __restrict__ gate_w_h2,    // [128, 1152]
     float* __restrict__ r_logits,             // [M, 128]
     int M) {
-    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int e = blockIdx.x;
-    if (e >= kInkExperts) return;
+    if (e >= kInkExperts) { INK_PDL_WAIT(); return; }
     const int tid  = threadIdx.x;
     const int warp = tid >> 5;
     const int lane = tid & 31;
     constexpr int K8 = kInkHidden / 8;  // 288 uint4s of __half2
     const uint4* wr = reinterpret_cast<const uint4*>(gate_w_h2 + (size_t)e * (kInkHidden / 2));
+    const uint4 wv0 = __ldg(wr + tid);
+    const uint4 wv1 = __ldg(wr + tid + 128);
+    const bool has2 = (tid + 256 < K8);
+    const uint4 wv2 = has2 ? __ldg(wr + tid + 256) : make_uint4(0u, 0u, 0u, 0u);
+    INK_PDL_WAIT();
+
     __half2 acc0[MAX_M], acc1[MAX_M];
 #pragma unroll
     for (int m = 0; m < MAX_M; ++m) {
         acc0[m] = __float2half2_rn(0.0f);
         acc1[m] = __float2half2_rn(0.0f);
     }
-    for (int i = tid; i < K8; i += 128) {
-        const uint4 wv = __ldg(wr + i);
+    auto accum_w = [&](const uint4& wv, int idx) {
         const __half2 w0 = *reinterpret_cast<const __half2*>(&wv.x);
         const __half2 w1 = *reinterpret_cast<const __half2*>(&wv.y);
         const __half2 w2 = *reinterpret_cast<const __half2*>(&wv.z);
@@ -3386,7 +3626,7 @@ __global__ void __launch_bounds__(128) k_ink_router_gemv_fp16(
 #pragma unroll
         for (int m = 0; m < MAX_M; ++m) {
             if (m < M) {
-                const float4* xp = reinterpret_cast<const float4*>(x_f32 + (size_t)m * kInkHidden + i * 8);
+                const float4* xp = reinterpret_cast<const float4*>(x_f32 + (size_t)m * kInkHidden + idx * 8);
                 const float4 x0 = xp[0], x1 = xp[1];
                 acc0[m] = __hfma2(w0, __floats2half2_rn(x0.x, x0.y), acc0[m]);
                 acc1[m] = __hfma2(w1, __floats2half2_rn(x0.z, x0.w), acc1[m]);
@@ -3394,7 +3634,10 @@ __global__ void __launch_bounds__(128) k_ink_router_gemv_fp16(
                 acc1[m] = __hfma2(w3, __floats2half2_rn(x1.z, x1.w), acc1[m]);
             }
         }
-    }
+    };
+    accum_w(wv0, tid);
+    accum_w(wv1, tid + 128);
+    if (has2) accum_w(wv2, tid + 256);
     __shared__ float s_w[MAX_M][4];
 #pragma unroll
     for (int m = 0; m < MAX_M; ++m) {
@@ -3407,6 +3650,131 @@ __global__ void __launch_bounds__(128) k_ink_router_gemv_fp16(
     __syncthreads();
     if (tid < M) {
         r_logits[(size_t)tid * kInkExperts + e] = s_w[tid][0] + s_w[tid][1] + s_w[tid][2] + s_w[tid][3];
+    }
+}
+
+// Fused Router TopK8 + MoE Bin for M <= 16 (gridDim.x = 2 >= PDL min_up; CTA 1 exits after INK_PDL_WAIT!)
+// Eliminates the serial 2-kernel bottleneck (k_ink_router_select_topk8 + 1-CTA k_ink_moe_bin) across 48 visits without L2 thrash!
+__global__ void __launch_bounds__(256) k_ink_router_topk8_bin_fused(
+    const InkExpertDev* __restrict__ ex,
+    const uint8_t* __restrict__ sec4_base,
+    const float* __restrict__ r_logits,   // [M, 128]
+    const float* __restrict__ gate_b,     // [128]
+    int32_t* __restrict__ topk_idx,       // [M, 8]
+    float* __restrict__ topk_w,           // [M, 8]
+    float route_scale,
+    int M,
+    int tile_rows,
+    InkMoeTables tb) {
+    INK_PDL_WAIT();
+    (void)sec4_base;
+    if (blockIdx.x > 0) return;
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    __shared__ int s_tok_e[16][kInkTopK];
+    __shared__ int s_cnt[128], s_off[128], s_act[128], s_tcnt[128], s_fill[128];
+
+    if (tid < 128) { s_cnt[tid] = 0; s_fill[tid] = 0; }
+    __syncthreads();
+
+    for (int tok = warp; tok < M; tok += 8) {
+        const float* lg = r_logits + (size_t)tok * kInkExperts;
+        float sc[4], pr[4];
+        int id[4];
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int e = lane + 32 * j;
+            const float p = 1.0f / (1.0f + expf(-lg[e]));
+            id[j] = e;
+            pr[j] = p;
+            sc[j] = p + gate_b[e];
+        }
+        int best_id[kInkTopK];
+        float best_p[kInkTopK];
+        float psum = 0.0f;
+#pragma unroll
+        for (int k = 0; k < kInkTopK; ++k) {
+            float mv = -1e30f;
+            int mi = 1000000;
+            float mp = 0.0f;
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                if (sc[j] > mv || (sc[j] == mv && id[j] < mi)) { mv = sc[j]; mi = id[j]; mp = pr[j]; }
+            }
+#pragma unroll
+            for (int o = 16; o >= 1; o >>= 1) {
+                const float ov = __shfl_xor_sync(0xFFFFFFFFu, mv, o);
+                const int   oi = __shfl_xor_sync(0xFFFFFFFFu, mi, o);
+                const float op = __shfl_xor_sync(0xFFFFFFFFu, mp, o);
+                if (ov > mv || (ov == mv && oi < mi)) { mv = ov; mi = oi; mp = op; }
+            }
+            best_id[k] = mi;
+            best_p[k] = mp;
+            psum += mp;
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                if (id[j] == mi) sc[j] = -1e30f;
+            }
+        }
+        if (lane < kInkTopK) {
+            const int e_sel = best_id[lane];
+            s_tok_e[tok][lane] = e_sel;
+            if (ex[e_sel].tier <= 1) atomicAdd(&s_cnt[e_sel], 1);
+            const float inv = route_scale / (psum + 1e-20f);
+            topk_idx[(size_t)tok * kInkTopK + lane] = e_sel;
+            topk_w[(size_t)tok * kInkTopK + lane] = best_p[lane] * inv;
+        }
+    }
+    __syncthreads();
+
+    if (tid < 128) {
+        const int cv = s_cnt[tid];
+        const int is_act = cv > 0 ? 1 : 0;
+        const int nt = (cv + tile_rows - 1) / tile_rows;
+        s_off[tid] = cv; s_act[tid] = is_act; s_tcnt[tid] = nt;
+    }
+    __syncthreads();
+#pragma unroll
+    for (int d = 1; d < 128; d <<= 1) {
+        int a0 = 0, a1 = 0, a2 = 0;
+        if (tid < 128 && tid >= d) { a0 = s_off[tid - d]; a1 = s_act[tid - d]; a2 = s_tcnt[tid - d]; }
+        __syncthreads();
+        if (tid < 128) { s_off[tid] += a0; s_act[tid] += a1; s_tcnt[tid] += a2; }
+        __syncthreads();
+    }
+    if (tid < 128) {
+        const int cv = s_cnt[tid];
+        const int off_e = s_off[tid] - cv;
+        s_fill[tid] = off_e;
+        tb.cnt[tid] = cv;
+        tb.off[tid] = off_e;
+        if (tid == 127) {
+            tb.off[128] = s_off[127];
+            *tb.nact = s_act[127];
+            *tb.n_tiles = s_tcnt[127];
+        }
+        if (cv > 0) tb.active[s_act[tid] - 1] = tid;
+        const int nt = (cv + tile_rows - 1) / tile_rows;
+        if (nt > 0) {
+            const int tbase = s_tcnt[tid] - nt;
+            for (int ti = 0; ti < nt; ++ti) tb.tiles[tbase + ti] = make_int2(tid, off_e + ti * tile_rows);
+        }
+    }
+    __syncthreads();
+
+    // Deterministic token-ordered scatter on CTA 0 (matches single-thread/sequential order!)
+    if (tid == 0) {
+        for (int tok = 0; tok < M; ++tok) {
+            for (int k = 0; k < kInkTopK; ++k) {
+                const int e = s_tok_e[tok][k];
+                if (ex[e].tier <= 1) {
+                    const int pos = s_fill[e]++;
+                    tb.pairs[pos] = tok * kInkTopK + k;
+                    tb.tok_idx[pos] = tok;
+                }
+            }
+        }
     }
 }
 
@@ -3431,43 +3799,82 @@ inline void launch_ink_moe_rtx5090(
     bool force_exact_dec,
     bool run_reduce8,
     bool use_atomic_out = false,
-    const __half2* w_router_h2 = nullptr) {
+    const __half2* w_router_h2 = nullptr,
+    bool c1_slot = false) {
+    const bool dpol_fast = c1_slot && rtx5090::draftpol_on();
+    static const bool m1_tc_on = [] {
+        const char* e = std::getenv("STRATA_INK_SM120_M1_TC");
+        return e && e[0] == '1';
+    }();
+    // Run 6-CTA/SM Zero-Smem L1-direct grouped_reg across M = 2..8 (932/932 PDL overlap & uniform FP16-act rounding for all single-block drafts!),
+    // switching to Blackwell hardware Bk128 NVFP4 Tensor Cores (pf=0, 932/932 PDL overlap) for wide M = 9..16 PLD / 2-block chains!
+    const bool use_grp_reg = dpol_fast && M >= 2 && M <= 8 &&
+                             d_scratch_h2 != nullptr && info.has_sf4 && !info.has_mx8 && !info.has_sk && !info.has_gguf;
+    const bool use_sm120_tc_m = dpol_fast && !use_grp_reg && sm120::available() && M >= 9 && M <= 16 &&
+                                !rtx5090::exact_mode_on() && !info.has_sk && !info.has_gguf && info.has_sf4;
+    const bool use_fused_rtr_bin = (use_grp_reg || use_sm120_tc_m) && M >= 2 && M <= 16 && w_router_h2 != nullptr && !rtx5090::exact_mode_on();
+    Sm120MoeSel pre_sel;
+    if (use_grp_reg) {
+        const size_t x_pairs = (size_t)M * (kInkHidden / 2);
+        k_ink_f32_to_h2<<<(x_pairs + 255) / 256, 256, 0, st>>>(x_f32, d_scratch_h2, x_pairs);
+    } else if (use_sm120_tc_m) {
+        pre_sel = sm120_moe_sel(sm120_cfg_current(), M);
+        pre_sel.pf_gu = 0;
+        pre_sel.pf_dn = 0;
+    }
+
     // 1. Router (FP16 fast path for M<=16 under !EXACT; exact F32 baseline otherwise!)
     if (M <= 16 && w_router_h2 != nullptr && !rtx5090::exact_mode_on()) {
         if (M == 1)      k_ink_router_gemv_fp16<1><<<kInkExperts, 128, 0, st>>>(x_f32, w_router_h2, ws.r_logits, M);
         else if (M <= 4) k_ink_router_gemv_fp16<4><<<kInkExperts, 128, 0, st>>>(x_f32, w_router_h2, ws.r_logits, M);
         else if (M <= 8) k_ink_router_gemv_fp16<8><<<kInkExperts, 128, 0, st>>>(x_f32, w_router_h2, ws.r_logits, M);
         else             k_ink_router_gemv_fp16<16><<<kInkExperts, 128, 0, st>>>(x_f32, w_router_h2, ws.r_logits, M);
-        k_ink_router_select_topk8<<<M, 32, 0, st>>>(ws.r_logits, gate_b, ws.topk_idx, ws.topk_w, route_scale, M, InkTailArgs{});   // tail skip (opt-in, f-tailskip) is not wired into the 5090 fast router path
+        if (use_fused_rtr_bin) {
+            const int fused_tr = use_grp_reg ? 8 : pre_sel.tile_rows;
+            k_ink_router_topk8_bin_fused<<<2, 256, 0, st>>>(
+                experts, sec4_base, ws.r_logits, gate_b, ws.topk_idx, ws.topk_w, route_scale, M, fused_tr, ws.tb);
+        } else {
+            k_ink_router_select_topk8<<<M, 32, 0, st>>>(ws.r_logits, gate_b, ws.topk_idx, ws.topk_w, route_scale, M, InkTailArgs{});   // tail skip (opt-in, f-tailskip) is not wired into the 5090 fast router path
+        }
         ink_moe_mark(0);
     } else {
         launch_ink_moe_router(st, cublas, gate_w, gate_b, x_f32, M, ws, route_scale, force_exact_dec);
     }
 
-    static const bool m1_tc_on = [] {
-        const char* e = std::getenv("STRATA_INK_SM120_M1_TC");
-        return e && e[0] == '1';
-    }();
     // 2a. Dedicated Zero-Bin Zero-Smem M=1 SF4/MX8 L1-Direct Kernel (or optional sm_120 NVFP4 TC via STRATA_INK_SM120_M1_TC=1!)
     if (M == 1 && !m1_tc_on && d_scratch_h2 != nullptr && !info.has_sk && !info.has_gguf && (info.has_sf4 || info.has_mx8)) {
         ink_moe_mark(1);
         __half2* x_h2 = d_scratch_h2;
         __half2* h_h2 = d_scratch_h2 + (kInkHidden / 2);
         k_ink_f32_to_h2<<<(kInkHidden / 2 + 255) / 256, 256, 0, st>>>(x_f32, x_h2, kInkHidden / 2);
-        static const int m1_dn_pf = [] {   // PERF-STEP: STRATA_INK_M1_DNPF=1 (default 0 until measured)
+        static const int m1_dn_pf = [] {   // PERF-STEP: STRATA_INK_M1_DNPF=0|1 (-1 = follow dpol_fast)
             const char* e = std::getenv("STRATA_INK_M1_DNPF");
-            return (e != nullptr && e[0] == '1') ? 1 : 0;
+            return (e != nullptr && *e != '\0') ? (e[0] != '0' ? 1 : 0) : -1;
         }();
-        k_ink_moe_gu_m1_l1<<<dim3(kInkInter / 16, kInkTopK), 256, 0, st>>>(sec4_base, experts, ws.topk_idx, x_h2, h_h2, m1_dn_pf);
+        const int use_dn_pf = (m1_dn_pf >= 0) ? m1_dn_pf : (dpol_fast ? 1 : 0);
+        k_ink_moe_gu_m1_l1<<<dim3(kInkInter / 16, kInkTopK), 256, 0, st>>>(sec4_base, experts, ws.topk_idx, x_h2, h_h2, use_dn_pf);
         ink_moe_mark(2);
         k_ink_moe_dn_m1_l1<<<dim3((kInkHidden / 2) / 16, kInkTopK), 256, 0, st>>>(sec4_base, experts, ws.topk_idx, ws.topk_w, h_h2, ws.y_pair);
+        ink_moe_mark(3);
+    } else if (use_grp_reg) {
+        const size_t x_pairs = (size_t)M * (kInkHidden / 2);
+        __half2* x_h2 = d_scratch_h2;
+        __half2* h_h2 = d_scratch_h2 + x_pairs;
+        if (!use_fused_rtr_bin) {
+            k_ink_moe_bin<<<1, 128, 0, st>>>(experts, ws.topk_idx, M, 8, ws.tb);
+        }
+        ink_moe_mark(1);
+        const int max_act = std::min(kInkExperts, M * kInkTopK);
+        k_moe_sf4_grouped_reg_gu<<<dim3(kInkInter / 16, max_act), 256, 0, st>>>(sec4_base, experts, ws.tb, x_h2, h_h2);
+        ink_moe_mark(2);
+        k_moe_sf4_grouped_reg_dn<<<dim3((kInkHidden / 2) / 16, max_act), 256, 0, st>>>(sec4_base, experts, ws.tb, h_h2, ws.topk_w, ws.y_pair);
         ink_moe_mark(3);
     } else {
     // 2b. Bin + Dispatch SF4 & MX8 Experts (sm_120 NVFP4/MX8 TC for M>=2 — or M>=1 when M1_TC=1 — when !EXACT!)
     const bool use_sm120_tc = (sm120::available() && ((!force_exact_dec && M >= 24) || (!rtx5090::exact_mode_on() && M >= (m1_tc_on ? 1 : 2))));
     if (use_sm120_tc && !info.has_sk && !info.has_gguf && (info.has_sf4 || info.has_mx8)) {
         // tile size and kernel variants per batch range come from the card's table row (strata/core/ink_sm120_table.hpp)
-        const Sm120MoeSel moe_sel = sm120_moe_sel(sm120_cfg_current(), M);
+        const Sm120MoeSel moe_sel = use_sm120_tc_m ? pre_sel : sm120_moe_sel(sm120_cfg_current(), M);
         const int tile_rows = moe_sel.tile_rows;
         const bool do_atomic = (use_atomic_out && tile_rows == 128 && y_out != nullptr);
         if (M >= 256 && d_scratch_f32 != nullptr) {
@@ -3476,7 +3883,7 @@ inline void launch_ink_moe_rtx5090(
             k_ink_moe_bin_par_count<<<32, 256, 0, st>>>(experts, ws.topk_idx, P, ws.tb.cnt);
             k_ink_moe_bin_par_prefix<<<1, 128, 0, st>>>(tile_rows, ws.tb, reinterpret_cast<int32_t*>(d_scratch_f32));
             k_ink_moe_bin_par_scatter<<<32, 256, 0, st>>>(experts, ws.topk_idx, P, reinterpret_cast<int32_t*>(d_scratch_f32), ws.tb);
-        } else {
+        } else if (!use_fused_rtr_bin) {
             k_ink_moe_bin<<<1, 128, 0, st>>>(experts, ws.topk_idx, M, tile_rows, ws.tb);
         }
         ink_moe_mark(1);

@@ -525,6 +525,7 @@ __global__ void __launch_bounds__(128) k_ink_flash_gqa_splitk(
     float* __restrict__ part_o,           // [M, 24, n_splits, 128]
     int M,
     int n_splits = kInkAttnSplits) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int kh = blockIdx.x;  // 0..7
     const int sp = blockIdx.y;  // 0..n_splits-1
     const int m  = blockIdx.z;  // 0..M-1
@@ -640,6 +641,7 @@ __global__ void __launch_bounds__(128) k_ink_flash_gqa_merge(
     float* __restrict__ out,              // [M, 24, 128]
     int M,
     int n_splits = kInkAttnSplits) {
+    INK_PDL_WAIT();   // PERF-STEP: first statement on every path (programmatic dependent launch)
     const int h = blockIdx.x;
     const int m = blockIdx.y;
     const int d = threadIdx.x;  // 0..127

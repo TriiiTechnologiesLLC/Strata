@@ -10,6 +10,7 @@
 #include "ink_dspark.cuh"
 #include "ink_rtx5090_bspec.cuh"
 #include "ink_runner.cuh"
+#include "ink_5090_draft_policy.cuh"
 #include "ink_spec.cuh"
 #include "ink_topk.cuh"
 #include "ink_vision_cuda.cuh"
@@ -209,7 +210,11 @@ static VramPlan plan_vram_reserve(const VramPlanIn& in) {
     // Note: unembed_screen (441 MiB) is allocated INSIDE load_from_model_file BEFORE expert packing.
     p.dspark_pad = in.build_screen ? (opt5060.pack ? (540ull << 20) : (224ull << 20)) : 0ull;
     // STRATA_INK_DRAFTER=dflash2: the DFlash 2 drafter's weights (Q8 + bf16) and scratch, ~480 MiB more than DSpark's buffers, are held back
-    if (in.build_screen && strata::ink::InkDFlash2::requested()) p.dspark_pad += (strata::ink::sm120_cfg(in.gpu_id).fast ? (strata::ink::df2_total_mib(strata::ink::df2_variant(in.total_vram < (24ull << 30)), in.max_slots) - 200ull) : (strata::ink::df2_f32_path() ? strata::ink::df2_total_mib(strata::ink::df2_variant(in.total_vram < (24ull << 30)), in.max_slots) - 100ull : 42ull * (size_t)std::min(in.max_slots, 8))) << 20;   // NV-OLDER (below sm_80): the whole drafter (FP32 matrices, block weights, scratch, rings), as the RTX 50 fast branch counts it: with 4 slots the planned K/V + workspace side exceeds the 1850 MiB figure below, and the drafter then took the last MiB (2080 Ti, --parallel 4: out of memory at the first request)   // the compact (pack) loader leaves DSpark's weights off the card
+    if (in.build_screen && strata::ink::InkDFlash2::requested()) {
+        strata::ink::Df2Variant dv = strata::ink::df2_variant(in.total_vram < (24ull << 30));
+        if (strata::ink::df2_5090_c1_mix_wanted(in.gpu_id, in.max_slots)) { dv.attn = 1; dv.ffn = 3; }
+        p.dspark_pad += (strata::ink::sm120_cfg(in.gpu_id).fast ? (strata::ink::df2_total_mib(dv, in.max_slots) - 200ull) : (strata::ink::df2_f32_path() ? strata::ink::df2_total_mib(dv, in.max_slots) - 100ull : 42ull * (size_t)std::min(in.max_slots, 8))) << 20;   // NV-OLDER (below sm_80): the whole drafter (FP32 matrices, block weights, scratch, rings), as the RTX 50 fast branch counts it: with 4 slots the planned K/V + workspace side exceeds the 1850 MiB figure below, and the drafter then took the last MiB (2080 Ti, --parallel 4: out of memory at the first request)   // the compact (pack) loader leaves DSpark's weights off the card
+    }
     p.ws_pad = opt5060.pack
         ? ((in.max_slots >= 16 ? (700ull << 20) : (420ull << 20)) + p.dspark_pad)
         : (((in.max_slots >= 8) ? (1280ull << 20)
@@ -1457,9 +1462,15 @@ public:
                 }
 
                 if (track_pld90_ && slot == 0 && !any_img && p0 >= 0) {   // only when the 5090-family drafting part is on (review finding: this copy ran for everyone)
+                    const bool dpol_c1 = (runner_->max_slots == 1 && strata::ink::ink_5090_draftpol_on(gpu_id_));
+                    if (p0 == 0 && dpol_c1) {
+                        pld_hist_.clear();
+                        dpol5090_.reset_request();
+                    }
                     const size_t need_len = (size_t)(p0 + M);
                     if (pld_hist_.size() < need_len) pld_hist_.resize(need_len, -1);
                     for (int k = 0; k < M; ++k) pld_hist_[(size_t)(p0 + k)] = toks[k];
+                    if (dpol_c1) dpol5090_.expected_next_pos = p0 + M;
                 }
                 const bool want_ms = (bspec_ && bspec_->ready && dspark_ && dspark_->ready && slot < bspec_->max_slots);
                 const bool want_taps = (taps_out != nullptr) || want_ms ||
@@ -1657,6 +1668,212 @@ public:
         if (anchor_pos <= 0 || anchor_pos + 12 >= eff_max_ctx_ || anchor_pos + 12 >= dspark_->max_ctx || max_emit < 1 || !out_emitted) return 0;
         if (!runner_->ensure_global_kv_cap(anchor_pos + want_cap) || !dspark_->ensure_ctx_cap(anchor_pos + want_cap)) return 0;
 
+        const bool dpol5090_on = dspark_opt && (runner_->max_slots == 1) && strata::ink::ink_5090_draftpol_on(gpu_id_) && (dspark_->df2 != nullptr);
+
+        // RTX 5090 C1 Tokens-Per-Millisecond Draft Policy (zero-draft Root-PLD, zero-draft Plain Bypass, calibrated DFlash 2 window)
+        if (dpol5090_on) {
+            auto sp_now = [] { return std::chrono::steady_clock::now(); };
+            auto sp_ms  = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
+                return std::chrono::duration<double, std::milli>(b - a).count();
+            };
+            const bool sp_log = spec_cfg_.log;
+            auto st_t0 = sp_now();
+
+            dpol5090_.begin_step(anchor_pos, pld_hist_);
+            if (pld_hist_.size() <= (size_t)anchor_pos) pld_hist_.resize((size_t)anchor_pos + 1, -1);
+            pld_hist_[(size_t)anchor_pos] = anchor_tok;
+
+            const auto& s120_c = strata::ink::sm120_cfg(gpu_id_);
+            const int max_nodes_5090 = want_cap;
+            const int base_max_5090  = std::min(s120_c.c1_max_nodes, max_nodes_5090);
+            static const bool pld_on_5090 = [] {
+                const char* e = std::getenv("STRATA_INK_SM120_PLD");
+                return !e || e[0] != '0';
+            }();
+            static const bool chain2_on_5090 = [] {
+                const char* e = std::getenv("STRATA_INK_SM120_CHAIN2");
+                return !e || e[0] != '0';
+            }();
+
+            auto run_plain_m1 = [&](double draft_sunk_ms) -> int {
+                auto tp0 = sp_now();
+                runner_->forward_seq(&anchor_tok, anchor_pos, 1, 0, true);
+                int32_t tok_next = 0;
+                runner_->head_argmax_exact(1, &tok_next);
+                out_emitted[0] = tok_next;
+                dspark_->df2->ingest_seq(runner_->d_taps, 0, anchor_pos, 1);
+                tree_snap_ready_ = false;
+                auto tp1 = sp_now();
+                const double p_ms = sp_ms(tp0, tp1);
+                if (draft_sunk_ms <= 0.01) dpol5090_.observe_plain_step(anchor_pos, p_ms);
+                else                       dpol5090_.expected_next_pos = anchor_pos + 1;
+                if (sp_log) {
+                    static long m1_cnt = 0;
+                    if (++m1_cnt <= 5 || m1_cnt % 50 == 0) {
+                        std::fprintf(stderr, "[5090-DPOL-M1 n=%ld pos=%d] draft=%.2fms plain=%.2fms gain=%.2f alpha=%.2f\n",
+                                     m1_cnt, anchor_pos, draft_sunk_ms, p_ms, dpol5090_.ema_gain_tok, dpol5090_.cal_alpha);
+                    }
+                }
+                if (out_drafted) *out_drafted = 0;
+                return 1;
+            };
+
+            strata::ink::InkTreeSpec tr{};
+            int32_t root_pld_c0 = -1;
+            bool root_pld_gen = false;
+            bool used_pld_only = dpol5090_.try_root_pld(
+                pld_hist_, anchor_tok, anchor_pos, max_nodes_5090, pld_on_5090, tr, root_pld_c0, root_pld_gen);
+            if (!used_pld_only && dpol5090_.want_pre_draft_plain(anchor_pos)) {
+                return run_plain_m1(0.0);
+            }
+
+            int32_t ids7[7] = {};
+            float raw_conf7[7] = {};
+            float cal_p7[7] = {};
+            strata::ink::df2::Df2Fork5090 fork_info{-1, -1, 0.0f, -1, 0.0f};
+            double cum_end = 0.0;
+            int main_drafts = 0;
+            auto st_t1 = st_t0;
+
+            if (!used_pld_only) {
+                const int32_t slot0 = 0;
+                if (!dspark_->df2->draft(1, &slot0, &anchor_tok, &anchor_pos, ids7, raw_conf7, nullptr, &fork_info)) {
+                    return run_plain_m1(0.0);
+                }
+                const int w_m = dpol5090_.build_df2_window(
+                    anchor_tok, anchor_pos, base_max_5090, max_nodes_5090,
+                    ids7, raw_conf7, fork_info, dspark_->df2->conf_pow, pld_on_5090, pld_hist_, cal_p7, cum_end, main_drafts, tr);
+                st_t1 = sp_now();
+                if (w_m <= 1) {
+                    return run_plain_m1(sp_ms(st_t0, st_t1));
+                }
+
+                // Ultra-high-confidence 2-block DFlash 2 chain (e.g. counting / exact templates) ONLY when priced rate wins!
+                if (chain2_on_5090 && tr.M == 8 && cum_end >= 0.58 && anchor_pos < 4352 && tr.M + 2 <= std::min(16, max_nodes_5090)) {
+                    int32_t ids2[7] = {};
+                    float conf2[7] = {};
+                    const int32_t pos2 = anchor_pos + 7;
+                    const int32_t hi2  = anchor_pos;
+                    if (dspark_->df2->draft(1, &slot0, &tr.tok[7], &pos2, ids2, conf2, &hi2)) {
+                        double c2 = cum_end;
+                        double e1 = 1.0;
+                        double c1 = 1.0;
+                        for (int i = 0; i < 7; ++i) { c1 *= cal_p7[i]; e1 += c1; }
+                        double e2 = e1;
+                        const double r1 = e1 / (2.0 * dpol5090_.ema_draft_ms + dpol5090_.t_verify_ms(8, anchor_pos));
+                        int add2 = 0;
+                        double best_r2 = r1 * 1.02;
+                        const int cap2 = std::min(6, std::min(16, max_nodes_5090) - 8);
+                        const double eff_pow2 = std::max(0.65, std::min(1.45, dspark_->df2->conf_pow * dpol5090_.cal_alpha));
+                        for (int k = 0; k < cap2; ++k) {
+                            const double pc2 = std::max(0.0, std::min(0.99, std::pow(std::max(0.0, (double)conf2[k]), eff_pow2)));
+                            if (pc2 < 0.45) break;
+                            c2 *= pc2;
+                            e2 += c2;
+                            const double rk = e2 / (2.0 * dpol5090_.ema_draft_ms + dpol5090_.t_verify_ms(8 + k + 1, anchor_pos));
+                            if (rk > best_r2) { best_r2 = rk; add2 = k + 1; }
+                        }
+                        if (add2 > 0) {
+                            for (int k = 0; k < add2; ++k) {
+                                const int nid = tr.M++;
+                                tr.tok[nid] = ids2[k];
+                                tr.parent[nid] = (int8_t)(nid - 1);
+                                tr.depth[nid] = (uint8_t)nid;
+                            }
+                            tr.build();
+                        }
+                    }
+                    st_t1 = sp_now();
+                }
+            } else {
+                st_t1 = sp_now();
+            }
+
+            // Snapshot ShortConv ONLY when tr.M >= 2 (mid-tree EOS rollback cannot occur at M == 1)
+            strata::ink::k_ink_sconv_slot_copy<<<dim3(strata::ink::kInkVisits, 4), 256, 0, runner_->st>>>(
+                runner_->d_sconv_pool_arr, d_sconv_snap_, 0, runner_->max_slots, true);
+
+            runner_->forward_tree_verify(tr, anchor_pos, 0, true);
+            if (sp_log) INK_CK(cudaStreamSynchronize(runner_->st));
+            auto st_t2 = sp_now();
+            int32_t target_next[strata::ink::kInkMaxTree] = {};
+            runner_->head_argmax_exact(tr.M, target_next);
+            auto st_t3 = sp_now();
+
+            const int emit_cap = std::min(max_emit, std::min(24, max_nodes_5090));
+            int32_t path[strata::ink::kInkMaxTree] = {};
+            int n_emit = 0;
+            int cur_node = 0;
+            while (n_emit < emit_cap) {
+                path[n_emit] = cur_node;
+                const int32_t tok_next = target_next[cur_node];
+                out_emitted[n_emit++] = tok_next;
+                int next_child = -1;
+                for (int j = cur_node + 1; j < tr.M; ++j) {
+                    if (tr.parent[j] == cur_node && tr.tok[j] == tok_next) {
+                        next_child = j;
+                        break;
+                    }
+                }
+                if (next_child >= 0) cur_node = next_child;
+                else break;
+            }
+            if (n_emit > 1) {
+                const size_t end_len = (size_t)(anchor_pos + n_emit);
+                if (pld_hist_.size() < end_len) pld_hist_.resize(end_len, -1);
+                for (int i = 0; i < n_emit - 1; ++i) pld_hist_[(size_t)(anchor_pos + 1 + i)] = out_emitted[i];
+            }
+
+            // Commit accepted path + direct DFlash 2 gather from runner_->d_taps via path[] (saves 4 k_ink_compact_taps launches!)
+            INK_CK(cudaMemcpyAsync(runner_->d_acc_path, path, (size_t)n_emit * 4, cudaMemcpyHostToDevice, runner_->st));
+            strata::ink::k_ink_commit_sconv_all48<<<dim3(strata::ink::kInkVisits, 4), 256, 0, runner_->st>>>(
+                runner_->d_sconv_pool_arr, runner_->d_stage_sconv, runner_->d_acc_path, n_emit, 0, runner_->max_slots, runner_->tree_cap);
+            strata::ink::k_ink_commit_kv_all48<<<dim3(strata::ink::kInkVisits, strata::ink::kInkKVHeads), 128, 0, runner_->st>>>(
+                runner_->d_kv_desc_arr, runner_->d_stage_k, runner_->d_stage_v, runner_->d_acc_path, anchor_pos, n_emit, 0, runner_->tree_cap);
+            runner_->elastic_kv.commit_tier2_tree(
+                runner_->d_stage_k, runner_->d_stage_v, runner_->d_acc_path, anchor_pos, n_emit, 0, runner_->tree_cap, runner_->st);
+            int32_t ing_sl[strata::ink::kInkMaxTree] = {};
+            int32_t ing_ps[strata::ink::kInkMaxTree] = {};
+            for (int i = 0; i < n_emit; ++i) { ing_sl[i] = 0; ing_ps[i] = anchor_pos + i; }
+            dspark_->df2->ingest(runner_->d_taps, path, ing_sl, ing_ps, n_emit);
+
+            const double d_ms = sp_ms(st_t0, st_t1);
+            const double v_ms = sp_ms(st_t1, st_t3) + 0.14;
+            if (used_pld_only) {
+                dpol5090_.observe_pld_step(anchor_pos, anchor_tok, root_pld_c0, root_pld_gen, tr.M, n_emit, v_ms);
+            } else {
+                int main_acc = 0;
+                while (main_acc < main_drafts && main_acc < (n_emit - 1) && out_emitted[main_acc] == ids7[main_acc]) {
+                    ++main_acc;
+                }
+                dpol5090_.observe_df2_step(anchor_pos, tr.M, n_emit, main_drafts, main_acc, raw_conf7, dspark_->df2->conf_pow, d_ms, v_ms);
+            }
+
+            if (sp_log) {
+                INK_CK(cudaStreamSynchronize(runner_->st));
+                auto st_t4 = sp_now();
+                static long dp_steps = 0, dp_emit = 0, dp_nodes = 0;
+                static double dp_d = 0, dp_v = 0, dp_a = 0, dp_c = 0;
+                ++dp_steps; dp_emit += n_emit; dp_nodes += tr.M;
+                dp_d += d_ms; dp_v += sp_ms(st_t1, st_t2); dp_a += sp_ms(st_t2, st_t3); dp_c += sp_ms(st_t3, st_t4);
+                if (dp_steps <= 5 || dp_steps % 50 == 0) {
+                    std::fprintf(stderr,
+                                 "[5090-DPOL steps=%ld] M=%.2f emit=%.2f (df2=%ld pld=%ld sp=%ld fk=%ld pl_pre=%ld pl_post=%ld) | draft=%.2fms verify=%.2fms argmax=%.2fms commit=%.2fms | alpha=%.2f gain=%.2f\n",
+                                 dp_steps, (double)dp_nodes / dp_steps, (double)dp_emit / dp_steps,
+                                 dpol5090_.stat_df2, dpol5090_.stat_pld, dpol5090_.stat_splice, dpol5090_.stat_fork,
+                                 dpol5090_.stat_plain_pre, dpol5090_.stat_plain_post,
+                                 dp_d / dp_steps, dp_v / dp_steps, dp_a / dp_steps, dp_c / dp_steps,
+                                 dpol5090_.cal_alpha, dpol5090_.ema_gain_tok);
+                }
+            }
+            tree_snap_ready_ = true;
+            tree_snap_p0_ = anchor_pos;
+            tree_snap_M_ = n_emit;
+            for (int i = 0; i < n_emit; ++i) tree_snap_path_[i] = path[i];
+            if (out_drafted) *out_drafted = tr.M - 1;
+            return n_emit;
+        }
+
         // Track slot-0 token history for zero-cost PLD suffix lookup
         if (dspark_opt) {
             if (pld_hist_.size() <= (size_t)anchor_pos) pld_hist_.resize((size_t)anchor_pos + 1, -1);
@@ -1683,7 +1900,7 @@ public:
         if (dspark_opt) {
         // 2. Root-PLD-First (zero-cost exact >=3-gram suffix spine) + W=3..4 Multi-Branch Bayes-Optimal Beam Tree!
         max_nodes = want_cap;
-        const int base_max = dspark_opt ? std::min(12, max_nodes) : max_nodes;
+        const int base_max = dspark_opt ? std::min(strata::ink::sm120_cfg(gpu_id_).c1_max_nodes, max_nodes) : max_nodes;
         static const bool pld_on = [] {
             const char* e = std::getenv("STRATA_INK_SM120_PLD");
             return !e || e[0] != '0';
@@ -2446,6 +2663,7 @@ private:
     int tree_snap_M_ = 0;
     int32_t tree_snap_path_[strata::ink::kInkMaxTree] = {};
     bool track_pld90_ = false;       // sm_120 table: the 5090-family deep-tree drafting part is on for this card
+    strata::ink::Ink5090DraftPolicy dpol5090_;
     std::vector<int32_t> pld_hist_;  // Slot-0 token history for zero-cost PLD suffix lookup (5090-family drafting switch)
     std::vector<int32_t> slot0_hist_;
     int dev_cc_ = 90;             // compute capability of the device (the drafter rule: emulated draft steps below sm_80)

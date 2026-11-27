@@ -150,6 +150,9 @@ __device__ __forceinline__ uint8_t encode_ue8m0(float amax, float& inv_scale) {
 
 // ---- Activation FP4 quantizer: 1 warp per 64 FP32 values -> 48-byte slot (sequential E2M1x2 matching .strata SF4!)
 __global__ void k_quant_act_fp4(const float* __restrict__ x, int64_t nblk, uint8_t* __restrict__ xa) {
+#if defined(INK_SM120_DEV) && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+#endif
 #if defined(INK_SM120_DEV)
     const int64_t w = (int64_t)blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
     if (w >= nblk) return;
@@ -190,6 +193,9 @@ constexpr float kGHaConst = 100.0f / (6.0f * 448.0f);  // exact mathematical bou
 
 __global__ void __launch_bounds__(256) k_quant_act_fp4_row(
     const float* __restrict__ x, int rows, int cols, uint8_t* __restrict__ xa) {
+#if defined(INK_SM120_DEV) && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+#endif
 #if defined(INK_SM120_DEV)
     const int row = blockIdx.x;
     if (row >= rows) return;
@@ -313,6 +319,9 @@ __global__ void __launch_bounds__(kNT) k_moe_sf4_tc(
     const int ur = tid >> 1;
     const int uj = tid & 1;
 
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+#endif
     const int total_tiles = *tb.n_tiles;
     const int nwork = total_tiles * NFB;
 
@@ -925,6 +934,9 @@ __global__ void __launch_bounds__(kNT) k_moe_sf4_tc_direct(
     const int ur = tid >> 1;
     const int uj = tid & 1;
 
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+#endif
     const int total_tiles = *tb.n_tiles;
     const int nwork = total_tiles * NFB;
 
@@ -1443,6 +1455,9 @@ __global__ void __launch_bounds__(kNT) k_moe_mx8_tc(
     const int ur = tid >> 1;
     const int uj = tid & 1;
 
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+#endif
     const int total_tiles = *tb.n_tiles;
     const int nwork = total_tiles * NFB;
 
@@ -1901,6 +1916,9 @@ __global__ void __launch_bounds__(kNT) k_moe_sf4_tc_bk128(
     const int ur = tid >> 1;
     const int uj = tid & 1;
 
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+#endif
     const int total_tiles = *tb.n_tiles;
     const int nwork = total_tiles * NFB;
 
@@ -4303,6 +4321,23 @@ void test_mx8_gemm_tc(const uint8_t* w_u8, const uint8_t* w_sc,
     INK_CK(cudaStreamSynchronize(stream));
     INK_CK(cudaFree(d_xq));
     INK_CK(cudaFree(d_xsc));
+}
+
+void register_pdl_kernels(void (*add_fn)(const char*, const void*)) {
+    if (!add_fn) return;
+    add_fn("sm120::k_quant_act_fp4", reinterpret_cast<const void*>(k_quant_act_fp4));
+    add_fn("sm120::k_quant_act_fp4_row", reinterpret_cast<const void*>(k_quant_act_fp4_row));
+    const char* dp = std::getenv("STRATA_INK_5090_DRAFTPOL");
+    const char* dp_ex = std::getenv("STRATA_INK_5090_DRAFTPOL_EXACT");
+    const bool dpol_allow = (!dp || (dp[0] != '0' && dp[0] != 'f' && dp[0] != 'F')) && (!dp_ex || std::atoi(dp_ex) == 0);
+    if (dpol_allow) {
+        add_fn("sm120::k_moe_sf4_tc_bk128<true,16>", reinterpret_cast<const void*>(k_moe_sf4_tc_bk128<true, 16>));
+        add_fn("sm120::k_moe_sf4_tc_bk128<false,16>", reinterpret_cast<const void*>(k_moe_sf4_tc_bk128<false, 16>));
+        add_fn("sm120::k_moe_sf4_tc_bk128<true,32>", reinterpret_cast<const void*>(k_moe_sf4_tc_bk128<true, 32>));
+        add_fn("sm120::k_moe_sf4_tc_bk128<false,32>", reinterpret_cast<const void*>(k_moe_sf4_tc_bk128<false, 32>));
+        add_fn("sm120::k_moe_sf4_tc<true,16>", reinterpret_cast<const void*>(k_moe_sf4_tc<true, 16, false>));
+        add_fn("sm120::k_moe_sf4_tc<false,16>", reinterpret_cast<const void*>(k_moe_sf4_tc<false, 16, false>));
+    }
 }
 
 }  // namespace strata::ink::sm120

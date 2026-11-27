@@ -125,5 +125,8 @@ void dense_sf4_gemm_tc(const uint8_t* w_sf4, const uint8_t* xa_fp4, float* y_f32
 void test_mx8_gemm_tc(const uint8_t* w_u8, const uint8_t* w_sc,
                       const float* x_f32, float* y_f32, int M, int N, int K, cudaStream_t stream);
 
+/// Register sm_120 MoE activation quantizer kernels with the PDL registry (ink_pdl_kernels.cuh).
+void register_pdl_kernels(void (*add_fn)(const char*, const void*));
+
 }  // namespace sm120
 }  // namespace strata::ink

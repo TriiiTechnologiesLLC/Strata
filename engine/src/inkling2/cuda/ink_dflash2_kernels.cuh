@@ -73,6 +73,7 @@ __global__ void __launch_bounds__(256) k_df2_gather_taps(const float* __restrict
 // (i / 7) * 8 + 1 + i % 7 of the 8-row block buffer (the 7 draft rows of every slot).
 __global__ void __launch_bounds__(256) k_df2_quant_act(const float* __restrict__ x, int8_t* __restrict__ xq, float* __restrict__ xs,
                                                        int rows, int K, int row_mode) {
+    INK_PDL_WAIT();
     const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
     const int nb = K >> 5;
     const int b = blockIdx.x * 8 + warp;
@@ -95,6 +96,7 @@ template <int MR>
 __global__ void __launch_bounds__(256) k_df2_gemv_q8(const int8_t* __restrict__ W, const float* __restrict__ wsc,
                                                      const int8_t* __restrict__ xq, const float* __restrict__ xs,
                                                      float* __restrict__ Y, int M, int N, int K, int n_chunks) {
+    INK_PDL_WAIT();
     extern __shared__ __align__(16) uint8_t g_smem[];
     const int nb = K >> 5;
     int8_t* sq = reinterpret_cast<int8_t*>(g_smem);                                   // [8][K]
@@ -313,6 +315,7 @@ __global__ void __launch_bounds__(256) k_df2_bf16_to_sf4(const uint16_t* __restr
 template <int MR>
 __global__ void __launch_bounds__(256) k_df2_gemv_sf4(const uint8_t* __restrict__ Wp, const uint8_t* __restrict__ Ws, float w_outer, const int8_t* __restrict__ xq,
                                                       const float* __restrict__ xs, float* __restrict__ Y, int M, int N, int K, int n_chunks) {
+    INK_PDL_WAIT();
     extern __shared__ __align__(16) uint8_t g_smem[];
     __shared__ uint16_t lut[256];
     const int nb = K >> 5;
@@ -389,6 +392,7 @@ __global__ void __launch_bounds__(256) k_df2_gemv_sf4(const uint8_t* __restrict_
 __global__ void __launch_bounds__(256) k_df2_conv_pre(const float* __restrict__ z, const float* __restrict__ dyn,
                                                       const float* __restrict__ base, float* __restrict__ out_f32,
                                                       __nv_bfloat16* __restrict__ out_bf16, int rows) {
+    INK_PDL_WAIT();
     const int r = blockIdx.x;
     if (r >= rows) return;
     const int t = r % kBlock;
@@ -406,6 +410,7 @@ __global__ void __launch_bounds__(256) k_df2_conv_pre(const float* __restrict__ 
 // x[r][c] += (b2[c] + dyn[288 + g]) * z[r][c] + (t > 0 ? (b3[c] + dyn[432 + g]) * z[r-1][c] : 0)
 __global__ void __launch_bounds__(256) k_df2_conv_post_add(const float* __restrict__ z, const float* __restrict__ dyn,
                                                            const float* __restrict__ base, float* __restrict__ x, int rows) {
+    INK_PDL_WAIT();
     const int r = blockIdx.x;
     if (r >= rows) return;
     const int t = r % kBlock;
@@ -425,6 +430,7 @@ __global__ void __launch_bounds__(256) k_df2_conv_post_add(const float* __restri
 // x[s * 8 + 0] = anchor_emb[s], x[s * 8 + t] = mask_row (t = 1..7)
 __global__ void __launch_bounds__(256) k_df2_build_x(const float* __restrict__ anchor_emb, const float* __restrict__ mask_row,
                                                      float* __restrict__ x, int B) {
+    INK_PDL_WAIT();
     const int r = blockIdx.x;
     if (r >= B * kBlock) return;
     const int s = r / kBlock, t = r % kBlock;
@@ -434,6 +440,7 @@ __global__ void __launch_bounds__(256) k_df2_build_x(const float* __restrict__ a
 
 // per-row positions of the block rows: pos0[s] + t
 __global__ void k_df2_block_pos(const int32_t* __restrict__ meta, int B, int32_t* __restrict__ pos, int32_t* __restrict__ srow) {
+    INK_PDL_WAIT();
     const int r = blockIdx.x * blockDim.x + threadIdx.x;
     if (r >= B * kBlock) return;
     pos[r] = meta[(r / kBlock) * 4 + 1] + (r % kBlock);
@@ -442,6 +449,7 @@ __global__ void k_df2_block_pos(const int32_t* __restrict__ meta, int B, int32_t
 
 // silu(g) * u
 __global__ void __launch_bounds__(256) k_df2_swiglu(const float* __restrict__ g, const float* __restrict__ u, float* __restrict__ out, size_t n) {
+    INK_PDL_WAIT();
     const size_t i = (size_t)blockIdx.x * 256 + threadIdx.x;
     if (i < n) {
         const float gv = g[i];
@@ -452,6 +460,7 @@ __global__ void __launch_bounds__(256) k_df2_swiglu(const float* __restrict__ g,
 // Per-head RMSNorm (weight [128] fp32) + NeoX half-split RoPE of x [M][H][128] in place; position of row m = pos[m].
 __global__ void __launch_bounds__(128) k_df2_rmsnorm_rope(float* __restrict__ x, const float* __restrict__ nw, const int32_t* __restrict__ pos,
                                                           float theta, int M, int H) {
+    INK_PDL_WAIT();
     const int m = blockIdx.y, h = blockIdx.x, d = threadIdx.x;
     if (m >= M || h >= H) return;
     __shared__ float s_x[kHeadDim];
@@ -478,6 +487,7 @@ __global__ void __launch_bounds__(128) k_df2_rmsnorm_rope(float* __restrict__ x,
 __global__ void __launch_bounds__(256) k_df2_ring_write(const float* __restrict__ kb, const float* __restrict__ vb,
                                                         const int32_t* __restrict__ slots, const int32_t* __restrict__ pos,
                                                         int layer, __half* const* __restrict__ rk_tab, __half* const* __restrict__ rv_tab, int n) {
+    INK_PDL_WAIT();
     const int i = blockIdx.x;
     if (i >= n) return;
     const int s = slots[i];
@@ -491,6 +501,245 @@ __global__ void __launch_bounds__(256) k_df2_ring_write(const float* __restrict_
     }
 }
 
+// Fused 5090 interleaved [n][2048] K|V RMSNorm + RoPE + Ring Write (eliminates 5 split wkv GEMMs + 10 kernel launches per draft/ingest!)
+__global__ void __launch_bounds__(128) k_df2_rmsnorm_rope_ring_write(
+    const float* __restrict__ kv_interleaved,   // [n, 2 * kKV]: K[0..1023], V[1024..2047]
+    const float* __restrict__ nw,               // [128]
+    const int32_t* __restrict__ slots,          // [n]
+    const int32_t* __restrict__ pos,            // [n]
+    float theta,
+    int layer,
+    __half* const* __restrict__ rk_tab,
+    __half* const* __restrict__ rv_tab,
+    int n) {
+    INK_PDL_WAIT();
+    const int h = blockIdx.x;
+    const int i = blockIdx.y;
+    const int d = threadIdx.x;
+    if (h >= kKvHeads || i >= n) return;
+    __shared__ float s_k[kHeadDim];
+    __shared__ float sh[8];
+    const float* row = kv_interleaved + (size_t)i * (2 * kKV);
+    const float kv_val = row[h * kHeadDim + d];
+    const float vv_val = row[kKV + h * kHeadDim + d];
+    const float ss = block_sum(kv_val * kv_val, sh);
+    const float inv = rsqrtf(ss * (1.0f / (float)kHeadDim) + kInkRmsEps);
+    s_k[d] = kv_val * inv * nw[d];
+    __syncthreads();
+
+    const int s = slots[i];
+    const int cell = pos[i] % kRingCap;
+    const size_t base = ((size_t)layer * kRingCap + cell) * kKV + h * kHeadDim;
+    rv_tab[s][base + d] = __float2half_rn(vv_val);
+    if (d < kHeadDim / 2) {
+        const float freq = 1.0f / powf(theta, (float)(2 * d) * (1.0f / (float)kHeadDim));
+        float sn, cs;
+        __sincosf((float)pos[i] * freq, &sn, &cs);
+        const float x0 = s_k[d], x1 = s_k[d + kHeadDim / 2];
+        rk_tab[s][base + d]               = __float2half_rn(x0 * cs - x1 * sn);
+        rk_tab[s][base + d + kHeadDim / 2] = __float2half_rn(x0 * sn + x1 * cs);
+    }
+}
+
+// Fused 5090 B=1 (M<=8) SF4 Gate + Up + SwiGLU (loads sq ONCE into 21 KB smem -> 4 CTAs/SM, eliminates 10 launches per draft!)
+__global__ void __launch_bounds__(256) k_df2_gemv_sf4_swiglu8(
+    const uint8_t* __restrict__ Wg_p, const uint8_t* __restrict__ Wg_s, float wg_outer,
+    const uint8_t* __restrict__ Wu_p, const uint8_t* __restrict__ Wu_s, float wu_outer,
+    const int8_t* __restrict__ xq, const float* __restrict__ xs,
+    float* __restrict__ Y, int M, int N, int K) {
+    INK_PDL_WAIT();
+    extern __shared__ __align__(16) uint8_t g_smem[];
+    __shared__ uint16_t lut[256];
+    constexpr int MR = 8;
+    const int nb = K >> 5;
+    int8_t* sq = reinterpret_cast<int8_t*>(g_smem);
+    float* ss = reinterpret_cast<float*>(g_smem + (size_t)MR * K);
+    {
+        const int mag[8] = {0, 1, 2, 3, 4, 6, 8, 12};
+        const int lo = threadIdx.x & 15, hi = threadIdx.x >> 4;
+        const int vlo = (lo & 8) ? -mag[lo & 7] : mag[lo & 7];
+        const int vhi = (hi & 8) ? -mag[hi & 7] : mag[hi & 7];
+        lut[threadIdx.x] = (uint16_t)(((uint32_t)(vlo & 0xFF)) | ((uint32_t)(vhi & 0xFF) << 8));
+    }
+    const int mrows = min(MR, M);
+    {
+        const int4* src = reinterpret_cast<const int4*>(xq);
+        int4* dst = reinterpret_cast<int4*>(sq);
+        const int n16 = mrows * K / 16;
+        for (int i = threadIdx.x; i < n16; i += 256) dst[i] = src[i];
+        for (int i = threadIdx.x; i < mrows * nb; i += 256) ss[i] = xs[i];
+    }
+    __syncthreads();
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+    const int n = blockIdx.x * 8 + warp;
+    if (n >= N) return;
+    const uint4* wg16 = reinterpret_cast<const uint4*>(Wg_p + (size_t)n * (K / 2));
+    const uint8_t* wgs = Wg_s + (size_t)n * (K / 16);
+    const uint4* wu16 = reinterpret_cast<const uint4*>(Wu_p + (size_t)n * (K / 2));
+    const uint8_t* wus = Wu_s + (size_t)n * (K / 16);
+    float acc_g[MR] = {}, acc_u[MR] = {};
+    for (int b = lane; b < nb; b += 32) {
+        const uint4 wg = wg16[b], wu = wu16[b];
+        __nv_fp8_e4m3 fg0, fg1, fu0, fu1;
+        fg0.__x = wgs[2 * b]; fg1.__x = wgs[2 * b + 1];
+        fu0.__x = wus[2 * b]; fu1.__x = wus[2 * b + 1];
+        const float sg0 = (float)fg0, sg1 = (float)fg1;
+        const float su0 = (float)fu0, su1 = (float)fu1;
+        const uint32_t wgv[4] = {wg.x, wg.y, wg.z, wg.w};
+        const uint32_t wuv[4] = {wu.x, wu.y, wu.z, wu.w};
+        uint32_t dg[8], du[8];
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            dg[2 * j]     = (uint32_t)lut[wgv[j] & 0xFF] | ((uint32_t)lut[(wgv[j] >> 8) & 0xFF] << 16);
+            dg[2 * j + 1] = (uint32_t)lut[(wgv[j] >> 16) & 0xFF] | ((uint32_t)lut[(wgv[j] >> 24) & 0xFF] << 16);
+            du[2 * j]     = (uint32_t)lut[wuv[j] & 0xFF] | ((uint32_t)lut[(wuv[j] >> 8) & 0xFF] << 16);
+            du[2 * j + 1] = (uint32_t)lut[(wuv[j] >> 16) & 0xFF] | ((uint32_t)lut[(wuv[j] >> 24) & 0xFF] << 16);
+        }
+#pragma unroll
+        for (int m = 0; m < MR; ++m) {
+            if (m < mrows) {
+                const uint4 a0 = *reinterpret_cast<const uint4*>(sq + (size_t)m * K + b * 32);
+                const uint4 a1 = *reinterpret_cast<const uint4*>(sq + (size_t)m * K + b * 32 + 16);
+                const float xsc = ss[m * nb + b];
+                int pg0 = dp4a_i8(dg[0], a0.x, 0); pg0 = dp4a_i8(dg[1], a0.y, pg0); pg0 = dp4a_i8(dg[2], a0.z, pg0); pg0 = dp4a_i8(dg[3], a0.w, pg0);
+                int pg1 = dp4a_i8(dg[4], a1.x, 0); pg1 = dp4a_i8(dg[5], a1.y, pg1); pg1 = dp4a_i8(dg[6], a1.z, pg1); pg1 = dp4a_i8(dg[7], a1.w, pg1);
+                int pu0 = dp4a_i8(du[0], a0.x, 0); pu0 = dp4a_i8(du[1], a0.y, pu0); pu0 = dp4a_i8(du[2], a0.z, pu0); pu0 = dp4a_i8(du[3], a0.w, pu0);
+                int pu1 = dp4a_i8(du[4], a1.x, 0); pu1 = dp4a_i8(du[5], a1.y, pu1); pu1 = dp4a_i8(du[6], a1.z, pu1); pu1 = dp4a_i8(du[7], a1.w, pu1);
+                acc_g[m] += ((float)pg0 * sg0 + (float)pg1 * sg1) * xsc;
+                acc_u[m] += ((float)pu0 * su0 + (float)pu1 * su1) * xsc;
+            }
+        }
+    }
+#pragma unroll
+    for (int m = 0; m < MR; ++m) {
+        const float gv = warp_sum(acc_g[m]) * 0.5f * wg_outer;
+        const float uv = warp_sum(acc_u[m]) * 0.5f * wu_outer;
+        if (lane == 0 && m < mrows) Y[(size_t)m * N + n] = (gv / (1.0f + __expf(-gv))) * uv;
+    }
+}
+
+// Zero-Smem L1-Direct PDL BF16 Multi-Row GEMV for RTX 5090 B=1 DFlash 2 (M <= 8, K = 2304):
+// Replaces 16 tiny M=8 cuBLAS Tensor-Core launches inside draft_b1_graph (conv_a, conv_f, wkv, sel_h),
+// staging constant weights BEFORE INK_PDL_WAIT() and keeping X [8, 2304] BF16 (36.8 KB) 100% in L1!
+template <int MAX_M>
+__global__ void __launch_bounds__(128) k_df2_gemv_bf16_smallM(
+    const uint16_t* __restrict__ W,          // [N, 2304] BF16
+    const __nv_bfloat16* __restrict__ X,     // [M, 2304] BF16
+    float* __restrict__ Y,                   // [M, N] FP32
+    int M, int N) {
+    const int tid = threadIdx.x;             // 0..127
+    const int sub = tid >> 4;                // 0..7 output rows/CTA
+    const int lg  = tid & 15;                // 0..15 lanes/row (256 B coalesced)
+    const int n   = blockIdx.x * 8 + sub;
+    if (n >= N) {
+        INK_PDL_WAIT();
+        return;
+    }
+    constexpr int K8 = kHidden / 8;          // 288 uint4s (8 BF16s = 16 B each); 288 / 16 = 18 per lane
+    const uint4* wr = reinterpret_cast<const uint4*>(W + (size_t)n * kHidden);
+    // Stage first 4 constant weight chunks (64 B/lane) while upstream kernel drains!
+    const uint4 w0 = __ldg(wr + lg + 0);
+    const uint4 w1 = __ldg(wr + lg + 16);
+    const uint4 w2 = __ldg(wr + lg + 32);
+    const uint4 w3 = __ldg(wr + lg + 48);
+    INK_PDL_WAIT();
+
+    float acc[MAX_M];
+#pragma unroll
+    for (int m = 0; m < MAX_M; ++m) acc[m] = 0.0f;
+
+    auto step16 = [&](const uint4& wv, int idx) {
+        const float2 wf0 = bf16x2_to_f32x2(wv.x);
+        const float2 wf1 = bf16x2_to_f32x2(wv.y);
+        const float2 wf2 = bf16x2_to_f32x2(wv.z);
+        const float2 wf3 = bf16x2_to_f32x2(wv.w);
+#pragma unroll
+        for (int m = 0; m < MAX_M; ++m) {
+            if (m < M) {
+                const uint4 xv = reinterpret_cast<const uint4*>(X + (size_t)m * kHidden)[idx];
+                const float2 xf0 = bf16x2_to_f32x2(xv.x);
+                const float2 xf1 = bf16x2_to_f32x2(xv.y);
+                const float2 xf2 = bf16x2_to_f32x2(xv.z);
+                const float2 xf3 = bf16x2_to_f32x2(xv.w);
+                float a = acc[m];
+                a = fmaf(wf0.x, xf0.x, a); a = fmaf(wf0.y, xf0.y, a);
+                a = fmaf(wf1.x, xf1.x, a); a = fmaf(wf1.y, xf1.y, a);
+                a = fmaf(wf2.x, xf2.x, a); a = fmaf(wf2.y, xf2.y, a);
+                a = fmaf(wf3.x, xf3.x, a); a = fmaf(wf3.y, xf3.y, a);
+                acc[m] = a;
+            }
+        }
+    };
+
+    const uint4 w4 = __ldg(wr + lg + 64);
+    const uint4 w5 = __ldg(wr + lg + 80);
+    step16(w0, lg + 0);
+    step16(w1, lg + 16);
+    const uint4 w6 = __ldg(wr + lg + 96);
+    const uint4 w7 = __ldg(wr + lg + 112);
+    step16(w2, lg + 32);
+    step16(w3, lg + 48);
+    step16(w4, lg + 64);
+    step16(w5, lg + 80);
+    step16(w6, lg + 96);
+    step16(w7, lg + 112);
+
+#pragma unroll
+    for (int base = 128; base < K8; base += 16) {
+        const uint4 wv = __ldg(wr + base + lg);
+        step16(wv, base + lg);
+    }
+
+#pragma unroll
+    for (int m = 0; m < MAX_M; ++m) {
+        if (m < M) {
+            float s = acc[m];
+#pragma unroll
+            for (int o = 8; o >= 1; o >>= 1) s += __shfl_xor_sync(0xFFFFFFFFu, s, o);
+            if (lg == 0) Y[(size_t)m * N + n] = s;
+        }
+    }
+}
+
+// PDL-safe B=1 draft head hidden quantizer: quantizes rows 1..7 of d_hd -> d_hq8[0..6] + d_hsc[0..6],
+// and zeroes padding row 7 so no cudaMemsetAsync node is needed inside draft_b1_graph!
+__global__ void __launch_bounds__(256) k_df2_quant_h_q8_b1(
+    const float* __restrict__ hd,            // [8, 2304]
+    int8_t* __restrict__ h_q8,               // [8, 2304]
+    float* __restrict__ h_sc) {              // [8]
+    INK_PDL_WAIT();
+    const int r = blockIdx.x;                // 0..6
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    if (r == 0) {
+        uint4* z4 = reinterpret_cast<uint4*>(h_q8 + (size_t)kDraft * kHidden);
+        for (int i = tid; i < kHidden / 16; i += 256) z4[i] = make_uint4(0u, 0u, 0u, 0u);
+        if (tid == 0) h_sc[kDraft] = 0.0f;
+    }
+    if (r >= kDraft) return;
+    const float* src = hd + (size_t)(r + 1) * kHidden;
+    int8_t* dst      = h_q8 + (size_t)r * kHidden;
+    __shared__ float sh_max[8];
+    __shared__ float s_sc;
+    float am = 0.0f;
+    for (int d = tid; d < kHidden; d += 256) am = fmaxf(am, fabsf(src[d]));
+    am = warp_max(am);
+    if (lane == 0) sh_max[warp] = am;
+    __syncthreads();
+    if (tid == 0) {
+        float g = sh_max[0];
+        for (int i = 1; i < 8; ++i) g = fmaxf(g, sh_max[i]);
+        s_sc = (g > 0.0f) ? (g * (1.0f / 127.0f)) : 1.0f;
+        h_sc[r] = s_sc;
+    }
+    __syncthreads();
+    const float inv = (s_sc > 0.0f) ? (1.0f / s_sc) : 0.0f;
+    for (int d = tid; d < kHidden; d += 256) {
+        dst[d] = (int8_t)max(-127, min(127, __float2int_rn(src[d] * inv)));
+    }
+}
+
 // ---- attention -----------------------------------------------------------------------------------------------------------------
 // One CTA per (kv head, slot, split): the 4 query heads of the group x the 8 block rows = 32 query rows share every K/V cell they read.
 // Row t of a block at position p sees cells [max(lo, p + t - 2047), p + 7] (not causal inside the block). Partial results (running max, sum,
@@ -500,6 +749,7 @@ __global__ void __launch_bounds__(256) k_df2_attn_part(const float* __restrict__
                                                        __half* const* __restrict__ rv_tab, const int32_t* __restrict__ meta,
                                                        const int32_t* __restrict__ hi_ctx, int layer, int split, float* __restrict__ part_m,
                                                        float* __restrict__ part_l, float* __restrict__ part_o) {
+    INK_PDL_WAIT();
     __shared__ __align__(16) float Qs[32][kHeadDim + 4];   // +4: the 4 rows of a warp read 4 different banks
     __shared__ __align__(16) __half Ks[kTileCells][kKStride];
     __shared__ __align__(16) __half Vs[kTileCells][kHeadDim];
@@ -628,6 +878,7 @@ __global__ void __launch_bounds__(256) k_df2_attn_part(const float* __restrict__
 // out[(b * 8 + t)][4096] <- softmax-merged partials; grid (8 kv heads, B, 32 rows), block 128 (one dim each)
 __global__ void __launch_bounds__(128) k_df2_attn_combine(const float* __restrict__ part_m, const float* __restrict__ part_l,
                                                           const float* __restrict__ part_o, int split, float* __restrict__ out) {
+    INK_PDL_WAIT();
     const int h = blockIdx.x, b = blockIdx.y, j = blockIdx.z, d = threadIdx.x;
     const size_t base = ((size_t)b * kKvHeads + h) * split;
     float m = -3.0e38f;
@@ -657,6 +908,7 @@ __device__ __forceinline__ bool df2_strict(float a, int ia, int ja, float b, int
 __global__ void __launch_bounds__(256) k_df2_tile_part(const int32_t* __restrict__ tile_i32, const float* __restrict__ head_sc,
                                                        const float* __restrict__ h_sc, int v0, int vt, int V, float cap,
                                                        int chunk_base, float2* __restrict__ part, float2* __restrict__ part_lse) {
+    INK_PDL_WAIT();
     __shared__ float w_val[8 * kTopK];
     __shared__ int w_id[8 * kTopK];
     __shared__ float lse_sh[8];
@@ -744,6 +996,7 @@ __global__ void __launch_bounds__(256) k_df2_tile_part(const int32_t* __restrict
 __global__ void __launch_bounds__(512) k_df2_top16_merge(const float2* __restrict__ part, const float2* __restrict__ part_lse,
                                                          int n_chunks, int V, float cap, int32_t* __restrict__ cand_out,
                                                          float* __restrict__ tail_out) {
+    INK_PDL_WAIT();
     __shared__ float all_v[64 * kTopK];
     __shared__ int all_id[64 * kTopK];
     __shared__ float win_v[kTopK];
@@ -814,6 +1067,7 @@ __global__ void __launch_bounds__(512) k_df2_select(const int32_t* __restrict__ 
                                                     const float* __restrict__ tail, const float* __restrict__ g,
                                                     const uint16_t* __restrict__ pred, const uint16_t* __restrict__ succ, int n_drafts,
                                                     int nv, float cap, int32_t* __restrict__ ids_out, float* __restrict__ conf_out) {
+    INK_PDL_WAIT();
     __shared__ __align__(16) float pg[kRank];
     __shared__ float sc_sh[kTopK];
     __shared__ int32_t prev_s;
@@ -872,6 +1126,178 @@ __global__ void __launch_bounds__(512) k_df2_select(const int32_t* __restrict__ 
     }
 }
 
+struct Df2Fork5090 {
+    int32_t fork_step;
+    int32_t alt_id;
+    float   alt_conf;
+    int32_t next_id;
+    float   next_conf;
+};
+
+// RTX 5090 extended bilinear selector: computes the exact same 7-step greedy chain as k_df2_select,
+// plus extracts the highest-EV early runner-up fork (d in {0, 1}) and runs 1 conditioned bilinear step
+// for its continuation token (~1.5 us extra, 0 extra GEMMs).
+__global__ void __launch_bounds__(512) k_df2_select_5090(
+    const int32_t* __restrict__ meta, const int32_t* __restrict__ cand,
+    const float* __restrict__ tail, const float* __restrict__ g,
+    const uint16_t* __restrict__ pred, const uint16_t* __restrict__ succ, int n_drafts,
+    int nv, float cap, int32_t* __restrict__ ids_out, float* __restrict__ conf_out,
+    Df2Fork5090* __restrict__ fork_out) {
+    INK_PDL_WAIT();
+    __shared__ __align__(16) float pg[kRank];
+    __shared__ float sc_sh[kTopK];
+    __shared__ int32_t prev_s;
+    __shared__ float conf0_s;
+    __shared__ int32_t best_d_s, best_alt_id_s;
+    __shared__ float best_alt_p_s, best_ev_s;
+    const int s = blockIdx.x;
+    const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    if (tid == 0) {
+        conf0_s = 1.0f;
+        best_d_s = -1;
+        best_alt_id_s = -1;
+        best_alt_p_s = 0.0f;
+        best_ev_s = 0.0f;
+    }
+    __syncthreads();
+    for (int d = 0; d < n_drafts; ++d) {
+        const int r = s * n_drafts + d;
+        const int32_t prev = d == 0 ? meta[s * 4 + 3] : prev_s;
+        if (tid < kRank) pg[tid] = (prev >= 0 && prev < nv) ? df2_bf16f(pred[(size_t)prev * kRank + tid]) * g[((size_t)s * kBlock + 1 + d) * kRank + tid] : 0.0f;
+        __syncthreads();
+        const int32_t id = cand[(size_t)r * 2 * kTopK + warp];
+        float dot = 0.0f;
+        if (id >= 0) {
+            const uint4 sv = *(reinterpret_cast<const uint4*>(succ + (size_t)id * kRank) + lane);
+            const float4 p0 = reinterpret_cast<const float4*>(pg)[2 * lane];
+            const float4 p1 = reinterpret_cast<const float4*>(pg)[2 * lane + 1];
+            dot += p0.x * df2_bf16f((uint16_t)(sv.x & 0xffffu));
+            dot += p0.y * df2_bf16f((uint16_t)(sv.x >> 16));
+            dot += p0.z * df2_bf16f((uint16_t)(sv.y & 0xffffu));
+            dot += p0.w * df2_bf16f((uint16_t)(sv.y >> 16));
+            dot += p1.x * df2_bf16f((uint16_t)(sv.z & 0xffffu));
+            dot += p1.y * df2_bf16f((uint16_t)(sv.z >> 16));
+            dot += p1.z * df2_bf16f((uint16_t)(sv.w & 0xffffu));
+            dot += p1.w * df2_bf16f((uint16_t)(sv.w >> 16));
+            dot = warp_sum(dot);
+        }
+        if (lane == 0) sc_sh[warp] = __int_as_float(cand[(size_t)r * 2 * kTopK + kTopK + warp]) + dot;
+        __syncthreads();
+        if (warp == 0) {
+            const int32_t my_id = lane < kTopK ? cand[(size_t)r * 2 * kTopK + lane] : 0x7fffffff;
+            const float my_sc = lane < kTopK ? sc_sh[lane] : -INFINITY;
+            float bv = my_sc;
+            int32_t bi = my_id;
+#pragma unroll
+            for (int o = 8; o > 0; o >>= 1) {
+                const float ov = __shfl_xor_sync(0xffffffffu, bv, o);
+                const int32_t oi = __shfl_xor_sync(0xffffffffu, bi, o);
+                if (df2_better(ov, oi, bv, bi)) { bv = ov; bi = oi; }
+            }
+            const float top = df2_softcap(bv, cap);
+            float m_ref = top, tail_term = 0.0f;
+            const float m_t = tail[2 * r];
+            const float l_t = tail[2 * r + 1];
+            if (isfinite(m_t) && l_t > 0.0f) {
+                m_ref = fmaxf(top, m_t);
+                tail_term = l_t * __expf(m_t - m_ref);
+            }
+            const float my_cap = lane < kTopK ? df2_softcap(my_sc, cap) : -INFINITY;
+            const float z16 = warp_sum(lane < kTopK ? __expf(my_cap - m_ref) : 0.0f);
+            const float denom = z16 + tail_term;
+            const float p1 = __expf(top - m_ref) / denom;
+            if (d <= 1 && fork_out != nullptr) {
+                float av = (lane < kTopK && my_id != bi) ? my_sc : -INFINITY;
+                int32_t ai = (lane < kTopK && my_id != bi) ? my_id : 0x7fffffff;
+#pragma unroll
+                for (int o = 8; o > 0; o >>= 1) {
+                    const float ov = __shfl_xor_sync(0xffffffffu, av, o);
+                    const int32_t oi = __shfl_xor_sync(0xffffffffu, ai, o);
+                    if (df2_better(ov, oi, av, ai)) { av = ov; ai = oi; }
+                }
+                if (lane == 0 && ai >= 0 && ai < nv && isfinite(av) && p1 <= 0.88f) {
+                    const float p2 = __expf(df2_softcap(av, cap) - m_ref) / denom;
+                    const float ev = (d == 0 ? 1.0f : conf0_s) * p2;
+                    if (p2 >= 0.09f && ev > best_ev_s) {
+                        best_d_s = d;
+                        best_alt_id_s = ai;
+                        best_alt_p_s = p2;
+                        best_ev_s = ev;
+                    }
+                }
+            }
+            if (lane == 0) {
+                ids_out[s * n_drafts + d] = bi;
+                conf_out[s * n_drafts + d] = p1;
+                prev_s = bi;
+                if (d == 0) conf0_s = p1;
+            }
+        }
+        __syncthreads();
+    }
+    if (fork_out != nullptr) {
+        const int fd = best_d_s;
+        if (fd >= 0 && fd + 1 < n_drafts) {
+            const int r = s * n_drafts + fd + 1;
+            const int32_t prev = best_alt_id_s;
+            if (tid < kRank) pg[tid] = (prev >= 0 && prev < nv) ? df2_bf16f(pred[(size_t)prev * kRank + tid]) * g[((size_t)s * kBlock + 1 + fd + 1) * kRank + tid] : 0.0f;
+            __syncthreads();
+            const int32_t id = cand[(size_t)r * 2 * kTopK + warp];
+            float dot = 0.0f;
+            if (id >= 0) {
+                const uint4 sv = *(reinterpret_cast<const uint4*>(succ + (size_t)id * kRank) + lane);
+                const float4 p0 = reinterpret_cast<const float4*>(pg)[2 * lane];
+                const float4 p1 = reinterpret_cast<const float4*>(pg)[2 * lane + 1];
+                dot += p0.x * df2_bf16f((uint16_t)(sv.x & 0xffffu));
+                dot += p0.y * df2_bf16f((uint16_t)(sv.x >> 16));
+                dot += p0.z * df2_bf16f((uint16_t)(sv.y & 0xffffu));
+                dot += p0.w * df2_bf16f((uint16_t)(sv.y >> 16));
+                dot += p1.x * df2_bf16f((uint16_t)(sv.z & 0xffffu));
+                dot += p1.y * df2_bf16f((uint16_t)(sv.z >> 16));
+                dot += p1.z * df2_bf16f((uint16_t)(sv.w & 0xffffu));
+                dot += p1.w * df2_bf16f((uint16_t)(sv.w >> 16));
+                dot = warp_sum(dot);
+            }
+            if (lane == 0) sc_sh[warp] = __int_as_float(cand[(size_t)r * 2 * kTopK + kTopK + warp]) + dot;
+            __syncthreads();
+            if (warp == 0) {
+                float bv = lane < kTopK ? sc_sh[lane] : -INFINITY;
+                int32_t bi = lane < kTopK ? cand[(size_t)r * 2 * kTopK + lane] : 0x7fffffff;
+                const float my_sc = bv;
+#pragma unroll
+                for (int o = 8; o > 0; o >>= 1) {
+                    const float ov = __shfl_xor_sync(0xffffffffu, bv, o);
+                    const int32_t oi = __shfl_xor_sync(0xffffffffu, bi, o);
+                    if (df2_better(ov, oi, bv, bi)) { bv = ov; bi = oi; }
+                }
+                const float top = df2_softcap(bv, cap);
+                float m_ref = top, tail_term = 0.0f;
+                const float m_t = tail[2 * r];
+                const float l_t = tail[2 * r + 1];
+                if (isfinite(m_t) && l_t > 0.0f) {
+                    m_ref = fmaxf(top, m_t);
+                    tail_term = l_t * __expf(m_t - m_ref);
+                }
+                const float my_cap = lane < kTopK ? df2_softcap(my_sc, cap) : -INFINITY;
+                const float z16 = warp_sum(lane < kTopK ? __expf(my_cap - m_ref) : 0.0f);
+                if (lane == 0) {
+                    fork_out[s].fork_step = fd;
+                    fork_out[s].alt_id    = best_alt_id_s;
+                    fork_out[s].alt_conf  = best_alt_p_s;
+                    fork_out[s].next_id   = bi;
+                    fork_out[s].next_conf = __expf(top - m_ref) / (z16 + tail_term);
+                }
+            }
+        } else if (tid == 0) {
+            fork_out[s].fork_step = -1;
+            fork_out[s].alt_id    = -1;
+            fork_out[s].alt_conf  = 0.0f;
+            fork_out[s].next_id   = -1;
+            fork_out[s].next_conf = 0.0f;
+        }
+    }
+}
+
 // ---- NV-OLDER: the FP32 / dp4a form of what needs sm_80 elsewhere (V100, RTX 20, GTX 10, P100) -----------------------------------------------------------------------
 
 // [M][4 * 2304] fp32 from four fp32 tap planes (the same gather as k_df2_gather_taps, without the bf16 rounding); row i reads plane row src_rows[i] (or i when src_rows is null).
@@ -926,6 +1352,32 @@ __global__ void __launch_bounds__(256) k_df2_screen_gemm(const int8_t* __restric
             if (lane == 0 && c0 + j < ncols) tile[(size_t)(c0 + j) * vt + v] = s;
         }
     }
+}
+
+inline void register_pdl_kernels() {
+    static std::atomic<int> done{0};
+    if (done.exchange(1, std::memory_order_acq_rel) != 0) return;
+    std::lock_guard<std::mutex> lock(pdl::reg().mu);
+    pdl::add_named("df2::k_df2_quant_act", k_df2_quant_act);
+    pdl::add_named("df2::k_df2_gemv_q8<8>", k_df2_gemv_q8<kGemvMR>);
+    pdl::add_named("df2::k_df2_gemv_sf4<8>", k_df2_gemv_sf4<kGemvMR>);
+    pdl::add_named("df2::k_df2_conv_pre", k_df2_conv_pre);
+    pdl::add_named("df2::k_df2_conv_post_add", k_df2_conv_post_add);
+    pdl::add_named("df2::k_df2_build_x", k_df2_build_x);
+    pdl::add_named("df2::k_df2_block_pos", k_df2_block_pos);
+    pdl::add_named("df2::k_df2_swiglu", k_df2_swiglu);
+    pdl::add_named("df2::k_df2_rmsnorm_rope", k_df2_rmsnorm_rope);
+    pdl::add_named("df2::k_df2_ring_write", k_df2_ring_write);
+    pdl::add_named("df2::k_df2_rmsnorm_rope_ring_write", k_df2_rmsnorm_rope_ring_write);
+    pdl::add_named("df2::k_df2_gemv_sf4_swiglu8", k_df2_gemv_sf4_swiglu8);
+    pdl::add_named("df2::k_df2_gemv_bf16_smallM<8>", k_df2_gemv_bf16_smallM<8>);
+    pdl::add_named("df2::k_df2_quant_h_q8_b1", k_df2_quant_h_q8_b1);
+    pdl::add_named("df2::k_df2_attn_part", k_df2_attn_part);
+    pdl::add_named("df2::k_df2_attn_combine", k_df2_attn_combine);
+    pdl::add_named("df2::k_df2_tile_part", k_df2_tile_part);
+    pdl::add_named("df2::k_df2_top16_merge", k_df2_top16_merge);
+    pdl::add_named("df2::k_df2_select", k_df2_select);
+    pdl::add_named("df2::k_df2_select_5090", k_df2_select_5090);
 }
 
 }  // namespace df2

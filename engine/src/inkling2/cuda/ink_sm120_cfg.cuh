@@ -224,6 +224,45 @@ inline const Sm120Cfg& sm120_cfg_current() noexcept {
     return sm120_cfg(dev);
 }
 
+inline bool ink_5090_draftpol_exact(int dev) noexcept {
+    const Sm120Cfg& c = sm120_cfg(dev);
+    if (c.exact) return true;
+    static const int ex_env = [] {
+        const char* e = std::getenv("STRATA_INK_5090_DRAFTPOL_EXACT");
+        return (e && *e) ? (std::atoi(e) != 0 ? 1 : 0) : 0;
+    }();
+    return ex_env != 0;
+}
+
+inline bool ink_5090_draftpol_on(int dev) noexcept {
+    static std::atomic<int> refused[16];
+    const int d = (dev >= 0 && dev < 16) ? dev : 0;
+    const Sm120Cfg& c = sm120_cfg(d);
+    const bool is_5090 = (c.row != nullptr && std::strcmp(c.row->id, "5090") == 0);
+    if (!is_5090) {
+        if (refused[d].exchange(1, std::memory_order_relaxed) == 0) {
+            const char* e = std::getenv("STRATA_INK_5090_DRAFTPOL");
+            if (e && *e && std::atoi(e) != 0) {
+                std::fprintf(stderr, "[InkCUDA] STRATA_INK_5090_DRAFTPOL=%s refused cleanly on device %d (requires RTX 5090 sm_120 32 GB)\n", e, d);
+            }
+        }
+        return false;
+    }
+    if (!c.fast || ink_5090_draftpol_exact(d)) return false;
+    static const int sw = [] {
+        const char* e = std::getenv("STRATA_INK_5090_DRAFTPOL");
+        if (!e || !*e) return -1;
+        return (e[0] == '0' || e[0] == 'f' || e[0] == 'F') ? 0 : 1;
+    }();
+    return sw != 0;
+}
+
+inline bool df2_5090_c1_mix_wanted(int dev, int max_slots) noexcept {
+    if (!ink_5090_draftpol_on(dev) || max_slots > 1) return false;
+    if (std::getenv("STRATA_INK_DFLASH2_WQ") || std::getenv("STRATA_INK_DFLASH2_W4")) return false;
+    return true;
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------------------
 // 5090 hand-over API (strata::ink::rtx5090::*): thin wrappers, no environment reads.
 // ------------------------------------------------------------------------------------------------------------------------------------------
@@ -237,6 +276,11 @@ inline bool dspark_opt_on() { return sm120_cfg_current().dspark_opt; }
 inline bool c64_spec_on() { return sm120_cfg_current().c64_bspec; }
 inline bool fp8_trunk_on() { return sm120_cfg_current().fp8_cache; }
 inline bool deep_tree_on() { return sm120_cfg_current().deep_tree; }
+inline bool draftpol_on() {
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess) { (void)cudaGetLastError(); dev = 0; }
+    return ink_5090_draftpol_on(dev);
+}
 }  // namespace rtx5090
 
 // ------------------------------------------------------------------------------------------------------------------------------------------

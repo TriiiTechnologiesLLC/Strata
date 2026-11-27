@@ -3232,7 +3232,8 @@ struct InkCudaRunner {
             al(d_xq8, mpad * kInkQDim);
             al(d_xs8, mpad * (kInkQDim / 32));
             if (!skip_bf16_screen) {
-                al(d_dot_hat, (size_t)screen_cap * kInkVocabUnpad);
+                const size_t dot_cols = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) ? (size_t)rtx5090::kBspecV8 : (size_t)kInkVocabUnpad;
+                al(d_dot_hat, (size_t)screen_cap * dot_cols);
                 al(d_h_norm2, (size_t)screen_cap);
                 al(d_max_lb, (size_t)screen_cap);
                 al(d_cand_ids, (size_t)screen_cap * 4096);
@@ -3256,6 +3257,10 @@ struct InkCudaRunner {
         bind_acts(1);
         INK_CK(cudaMemcpy(d_kv_desc_arr, kv_desc, sizeof(kv_desc), cudaMemcpyHostToDevice));
         INK_CK(cudaMemcpy(d_sconv_pool_arr, d_sconv_pool, sizeof(d_sconv_pool), cudaMemcpyHostToDevice));
+        if (!m.ls_active && max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu) && d_cublas_ws_5090 == nullptr) {
+            d_cublas_ws_5090 = dalloc<uint8_t>(8ull << 20);
+            cublasSetWorkspace(cublas, d_cublas_ws_5090, 8ull << 20);
+        }
 
         // Warmup cuBLAS Tensor Cores once at init (eliminates 61 ms first-call JIT tax from prompt #1!)
         {
@@ -4588,7 +4593,8 @@ struct InkCudaRunner {
                         rtx5090::k_ink_ctrl_3x_down_fp8<24><<<dim3(kInkGateRank, 3), 256, 0, st>>>(d_ctrl_cat, fp8_eng.w_ctrl_dn[ci][0], fp8_eng.sc_ctrl_dn[ci][0], fp8_eng.w_ctrl_dn[ci][1], fp8_eng.sc_ctrl_dn[ci][1], fp8_eng.w_ctrl_dn[ci][2], fp8_eng.sc_ctrl_dn[ci][2], d_ctrl_gate, M);
                         rtx5090::k_ink_ctrl_3x_apply_fp8<24><<<dim3(D / 16, 3), 256, 0, st>>>(src0, src1, src2, d_msgs, d_ctrl_gate, fp8_eng.w_ctrl_gf[ci][0], fp8_eng.sc_ctrl_gf[ci][0], fp8_eng.w_ctrl_gf[ci][1], fp8_eng.sc_ctrl_gf[ci][1], fp8_eng.w_ctrl_gf[ci][2], fp8_eng.sc_ctrl_gf[ci][2], d_inp0, d_inp1, d_inp2, M);
                     }
-                    if (M <= 8) {
+                    const int h2_m_cap = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) ? 16 : 8;
+                    if (M <= h2_m_cap) {
                         rtx5090::k_ink_rms_norm_3x_h2<<<dim3(M, 3), 256, 0, st>>>(
                             d_inp0, d_inp1, d_inp2, nw_q, nw_k, nw_v, reinterpret_cast<__half2*>(d_x_bf16), M, D);
                         qkv_h2_ready = true;
@@ -4719,7 +4725,8 @@ struct InkCudaRunner {
         } else {
         if (fp8_eng.cache_ready && !m.ls_active && !q8f_dense && fp8_eng.w_attn[ip][0] != nullptr) {
             constexpr int kRDim = kInkHeads * kInkDRel;
-            if (M <= 8 || !fp8_eng.lt_ok || M_pad32 > max_batch) {
+            const int l1_m_cap = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) ? 16 : 8;
+            if (M <= l1_m_cap || !fp8_eng.lt_ok || M_pad32 > max_batch) {
                 rtx5090::InkMultiProjFp8 mp{};
                 const int ns[5] = {kInkQDim, kRDim, kInkQDim, kInkKVDim, kInkKVDim};
                 const float* xs[5] = {in_q, in_q, in_q, in_k, in_v};
@@ -4741,7 +4748,7 @@ struct InkCudaRunner {
                         }
                     }
                     rtx5090::k_ink_gemv_multi_fp8_m1_l1<<<(mp.cumN[5] + 7) / 8, 256, 0, st>>>(mp, xh0, xhk, xhv, kInkHidden);
-                } else if (M <= 8) {
+                } else if (M <= l1_m_cap) {
                     const size_t n2 = (size_t)M * (kInkHidden / 2);
                     __half2* xh0 = reinterpret_cast<__half2*>(d_x_bf16);
                     __half2* xhk = share_qkv ? xh0 : (xh0 + n2);
@@ -4753,8 +4760,9 @@ struct InkCudaRunner {
                             rtx5090::k_ink_f32_to_h2<<<(n2 + 255) / 256, 256, 0, st>>>(in_v, xhv, n2);
                         }
                     }
-                    if (M <= 4) rtx5090::k_ink_gemv_multi_fp8_smallM_l1<4><<<(mp.cumN[5] + 7) / 8, 256, 0, st>>>(mp, xh0, xhk, xhv, M, kInkHidden);
-                    else        rtx5090::k_ink_gemv_multi_fp8_smallM_l1<8><<<(mp.cumN[5] + 7) / 8, 256, 0, st>>>(mp, xh0, xhk, xhv, M, kInkHidden);
+                    if (M <= 4)      rtx5090::k_ink_gemv_multi_fp8_smallM_l1<4><<<(mp.cumN[5] + 7) / 8, 256, 0, st>>>(mp, xh0, xhk, xhv, M, kInkHidden);
+                    else if (M <= 8) rtx5090::k_ink_gemv_multi_fp8_smallM_l1<8><<<(mp.cumN[5] + 7) / 8, 256, 0, st>>>(mp, xh0, xhk, xhv, M, kInkHidden);
+                    else             rtx5090::k_ink_gemv_multi_fp8_smallM_l1<16><<<(mp.cumN[5] + 7) / 8, 256, 0, st>>>(mp, xh0, xhk, xhv, M, kInkHidden);
                 } else {
                     rtx5090::k_ink_gemv_multi_fp8<8><<<(mp.cumN[5] + 3) / 4, 64, 0, st>>>(mp, in_q, M, kInkHidden);
                 }
@@ -5007,7 +5015,8 @@ struct InkCudaRunner {
             dim3 gr(kInkHeads, M);
             const bool t2_attn = (!is_swa && elastic_kv.tier2_active_for_pos(cur_max_pos));
             const bool use_rtx_pf_attn = (mode == 0 && M >= 128 && !t2_attn && rtx5090::pf_attn_on() && d_rtx_rel_proj_T[ip] != nullptr);
-            const bool want_wo_h2 = (M <= 8 && !t2_attn && fp8_eng.cache_ready && !m.ls_active && fp8_eng.w_attn[ip][5] != nullptr);
+            const int wo_h2_m_cap = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) ? 16 : 8;
+            const bool want_wo_h2 = (M <= wo_h2_m_cap && !t2_attn && fp8_eng.cache_ready && !m.ls_active && fp8_eng.w_attn[ip][5] != nullptr);
             const bool use_fp16_flash = (mode == 0 && M >= 32 && fp8_sm.ready && cur_cc >= 80 && !t2_attn);
             const bool use_mc_fp8rel = false;
             const bool mc_bspec = (mode == 3 && d_bspec_k && d_bspec_v && d_bspec_sconv);
@@ -5122,11 +5131,11 @@ struct InkCudaRunner {
               } else {
                 // #6671: a verify tree uses the one-token step's split count, so row m is the value the step at that position gives (the key split, the
                 // warp walk and the merge are the same; only the count differed: 8 for M > 1 against 16 / 32 for M == 1)
-                const int n_sp = (M == 1 || mode == 2) ? (is_swa ? 16 : kInkAttnMaxSplits) : kInkAttnSplits;
+                int n_sp = (M == 1 || mode == 2) ? (is_swa ? 16 : kInkAttnMaxSplits) : kInkAttnSplits;
                 dim3 gsp(kInkKVHeads, n_sp, M);
                 // fast only (STRATA_INK_SM120_TC_ATTN): tensor-core split-K for the global visits; falls back to the old kernels for K8V8 / K8V4 KV, SWA visits and prefill chunks
                 bool tc_done = false;
-                if (!is_swa && sm120_cfg(m.primary_gpu).tc_attn && (mode == 2 || (mode == 0 && M <= 16) || mode == 1)) {
+                if (!is_swa && !dpol_short_kv && sm120_cfg(m.primary_gpu).tc_attn && (mode == 2 || (mode == 0 && M <= 16) || mode == 1)) {
                     const bool deep = (mode == 2 && d_tree_anc32 != nullptr);
                     tc_done = tcattn::launch(st, d_q, d_rel_table, d_sinks, kv_desc[visit], (mode == 1) ? d_slots : nullptr, slot0, d_pos,
                                              (mode == 2) ? d_k : nullptr, (mode == 2) ? d_v : nullptr,
@@ -5134,7 +5143,15 @@ struct InkCudaRunner {
                                              deep ? (int)kInkMaxTree : (int)kInkMaxTreeDepth, d_attn_pm, d_attn_pl, d_attn_po, M);
                 }
                 if (tc_done) {
+                } else if (mode == 2 && is_swa && M >= 2 && M <= 16 && d_tree_anc32 != nullptr && max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) {
+                    n_sp = 8;
+                    rtx5090::k_ink_flash_swa_tree_shared<<<dim3(kInkHeads, n_sp, (M + 7) / 8), 128, 0, st>>>(
+                        d_q, d_rel_table, d_sinks,
+                        kv_desc[visit], slot0, d_pos,
+                        d_k, d_v, d_tree_anc32, d_tree_dep,
+                        d_attn_pm, d_attn_pl, d_attn_po, M, n_sp);
                 } else if (mode == 2 && d_tree_anc32 != nullptr) {
+                    if (dpol_short_kv) { n_sp = 8; gsp = dim3(kInkKVHeads, n_sp, M); }
                     rtx5090::k_ink_flash_gqa_splitk_deep<<<gsp, 128, 0, st>>>(
                         d_q, d_rel_table, d_sinks,
                         kv_desc[visit], nullptr, slot0, d_pos,
@@ -5320,7 +5337,8 @@ struct InkCudaRunner {
             }
             wo_fp8_done = true;
         } else if (fp8_eng.cache_ready && !m.ls_active && fp8_eng.w_attn[ip][5] != nullptr) {
-            if (M <= 8 || !fp8_eng.lt_ok || M_pad32 > max_batch) {
+            const int wo_l1_cap = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) ? 16 : 8;
+            if (M <= wo_l1_cap || !fp8_eng.lt_ok || M_pad32 > max_batch) {
                 rtx5090::InkMultiProjFp8 mp{};
                 mp.count = 1; mp.cumN[0] = 0; mp.cumN[1] = kInkHidden; mp.N[0] = kInkHidden;
                 mp.W[0] = fp8_eng.w_attn[ip][5]; mp.sc[0] = fp8_eng.sc_attn[ip][5]; mp.X[0] = d_attn_out; mp.Y[0] = d_wo_raw;
@@ -5328,12 +5346,13 @@ struct InkCudaRunner {
                     __half2* xh0 = reinterpret_cast<__half2*>(d_x_bf16);
                     if (!wo_h2_ready) rtx5090::k_ink_f32_to_h2<<<(kInkQDim / 2 + 255) / 256, 256, 0, st>>>(d_attn_out, xh0, kInkQDim / 2);
                     rtx5090::k_ink_gemv_multi_fp8_m1_l1<<<(kInkHidden + 7) / 8, 256, 0, st>>>(mp, xh0, nullptr, nullptr, kInkQDim);
-                } else if (M <= 8) {
+                } else if (M <= wo_l1_cap) {
                     const size_t n2 = (size_t)M * (kInkQDim / 2);
                     __half2* xh0 = reinterpret_cast<__half2*>(d_x_bf16);
                     if (!wo_h2_ready) rtx5090::k_ink_f32_to_h2<<<(n2 + 255) / 256, 256, 0, st>>>(d_attn_out, xh0, n2);
-                    if (M <= 4) rtx5090::k_ink_gemv_multi_fp8_smallM_l1<4><<<(kInkHidden + 7) / 8, 256, 0, st>>>(mp, xh0, nullptr, nullptr, M, kInkQDim);
-                    else        rtx5090::k_ink_gemv_multi_fp8_smallM_l1<8><<<(kInkHidden + 7) / 8, 256, 0, st>>>(mp, xh0, nullptr, nullptr, M, kInkQDim);
+                    if (M <= 4)      rtx5090::k_ink_gemv_multi_fp8_smallM_l1<4><<<(kInkHidden + 7) / 8, 256, 0, st>>>(mp, xh0, nullptr, nullptr, M, kInkQDim);
+                    else if (M <= 8) rtx5090::k_ink_gemv_multi_fp8_smallM_l1<8><<<(kInkHidden + 7) / 8, 256, 0, st>>>(mp, xh0, nullptr, nullptr, M, kInkQDim);
+                    else             rtx5090::k_ink_gemv_multi_fp8_smallM_l1<16><<<(kInkHidden + 7) / 8, 256, 0, st>>>(mp, xh0, nullptr, nullptr, M, kInkQDim);
                 } else {
                     rtx5090::k_ink_gemv_multi_fp8<8><<<(kInkHidden + 3) / 4, 64, 0, st>>>(mp, d_attn_out, M, kInkQDim);
                 }
@@ -5579,7 +5598,7 @@ struct InkCudaRunner {
                     moe_in_ptr, d_moe_raw, M, *cur_moe_ws,
                     d_ctrl_gain, reinterpret_cast<__half2*>(d_x_bf16),
                     m.man.c.route_scale, (mode == 2), !fuse_moe_sconv && !atomic_pf_moe, atomic_pf_moe,
-                    fp8_eng.cache_ready ? fp8_eng.w_router_h2[ip] : nullptr);
+                    fp8_eng.cache_ready ? fp8_eng.w_router_h2[ip] : nullptr, (max_slots == 1));
             } else {
                 launch_ink_moe(
                     st, cublas, m.sec4_stage(cur_stage), m.d_experts[ip], m.moe_info[ip],
@@ -5610,6 +5629,11 @@ struct InkCudaRunner {
                     uint16_t* stg = d_mc_sconv_stage ? (d_mc_sconv_stage + (size_t)visit * mc_cur_B * mc_cur_K * kInkSconvCh) : nullptr;
                     k_ink_moe_reduce8_sconv_multichain<<<dim3((kInkHidden + 255) / 256, mc_cur_B), 256, 0, st>>>(
                         cur_moe_ws->y_pair, m.d_sconv_mlp[ip], hbase, d_mc_slot_ids, d_cur, stg, mlp_ch_off, mc_cur_B, mc_cur_K);
+                } else if (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) {
+                    rtx5090::k_ink_moe_reduce8_sconv_tree_32<<<(kInkHidden + 31) / 32, 32, 0, st>>>(
+                        cur_moe_ws->y_pair, m.d_sconv_mlp[ip], hbase + (size_t)slot0 * 3 * kInkHidden,
+                        d_sconv_lag, d_stage_sconv + (size_t)visit * tree_cap * kInkSconvCh,
+                        mlp_ch_off, d_cur, M);
                 } else {
                     k_ink_moe_reduce8_sconv_tree<<<(kInkHidden + 127) / 128, 128, 0, st>>>(
                         cur_moe_ws->y_pair, m.d_sconv_mlp[ip], hbase + (size_t)slot0 * 3 * kInkHidden,
@@ -6669,6 +6693,7 @@ struct InkCudaRunner {
             INK_CK(cudaMemcpyAsync(d_tree_anc32, h_bytes + 512, kInkMaxTree * kInkMaxTree, cudaMemcpyHostToDevice, st));
         }
 
+        dpol_short_kv = false;
         if (use_cuda_graph && !m.ls_active && max_passes_override == 0 && slot0 == 0 && M <= tree_cap && m.n_host_experts == 0 && !elastic_kv.needs_eager_for_pos(cur_max_pos)) {
             GraphKey key{M, 2, want_taps ? 1 : 0, (int)kv_dtype};
             cudaGraphExec_t exec = nullptr;
@@ -6692,9 +6717,11 @@ struct InkCudaRunner {
                     use_cuda_graph = false;
                     std::fprintf(stderr, "[InkCUDA] Tree CUDA Graph capture unavailable (err=%d): falling back to eager mode\n", (int)ge);
                     emit_48_visits(M, 2, slot0, p0, want_taps);
+                    dpol_short_kv = false;
                     return;
                 }
-                if (m.all_sf4_vram && graph_cache.size() >= 8) {
+                const size_t gcap = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) ? 36u : 8u;
+                if (m.all_sf4_vram && graph_cache.size() >= gcap) {
                     if (graph_cache.front().exec) cudaGraphExecDestroy(graph_cache.front().exec);
                     graph_cache.erase(graph_cache.begin());
                 }
@@ -6708,9 +6735,11 @@ struct InkCudaRunner {
                 use_cuda_graph = false;
                 emit_48_visits(M, 2, slot0, p0, want_taps);
                 dbg_tree_print(tree, p0);
+                dpol_short_kv = false;
                 return;
             }
             dbg_tree_print(tree, p0);
+            dpol_short_kv = false;
             return;
         }
         // Opt-in RTX 5060 Ti 42/43-Visit Prefix+Core CUDA Graph even when Coda layers live in Host RAM!
@@ -6746,6 +6775,7 @@ struct InkCudaRunner {
                     INK_CK(cudaGraphLaunch(exec, st));
                     emit_visits_coda_from(fhc, M, 2, slot0, p0, want_taps);
                     dbg_tree_print(tree, p0);
+                    dpol_short_kv = false;
                     return;
                 }
             }
@@ -6753,6 +6783,7 @@ struct InkCudaRunner {
         emit_48_visits(M, 2, slot0, p0, want_taps);
         if (m.hybrid.active && m.n_host_experts > 0) m.hybrid.step_after(M, m.d_sec4, m.d_experts, st);   // the hot tier learns from verify steps too
         dbg_tree_print(tree, p0);
+        dpol_short_kv = false;
     }
     void dbg_tree_print(const InkTreeSpec& tree, int p0) {
         if (!dbg_hash_on) return;
@@ -6958,6 +6989,8 @@ struct InkCudaRunner {
         if (ui.fmt == FMT_Q8ROW && rtx5090::dspark_opt_on() && !rtx5090::exact_mode_on() &&
             M <= screen_cap && !m.ls_active) {
             constexpr int kEvalK = 32;
+            const bool dpol = (max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu));
+            const int M_gemm = (dpol && (((M + 3) & ~3) <= screen_cap)) ? ((M + 3) & ~3) : M;
             const float*  w_sc = reinterpret_cast<const float*>(m.d_trunk + ui.off);
             const int8_t* w_i8 = reinterpret_cast<const int8_t*>(m.d_trunk + ui.off + (size_t)ui.rows() * sizeof(float));
             int8_t*  h_q8 = reinterpret_cast<int8_t*>(d_x_bf16);
@@ -6966,10 +6999,11 @@ struct InkCudaRunner {
             int32_t* tmp_i = reinterpret_cast<int32_t*>(d_ctrl_cat);
             float*   tmp_v = d_ctrl_cat + (size_t)M * 512;
             rtx5090::k_ms_quant_h_q8<<<M, 256, 0, st>>>(d_h_norm, h_q8, h_sc, M);
+            if (M_gemm > M) INK_CK(cudaMemsetAsync(h_q8 + (size_t)M * kInkHidden, 0, (size_t)(M_gemm - M) * kInkHidden, st));
             const int32_t alpha_i = 1, beta_i = 0;
             INK_CUBLAS_CK(cublasGemmEx(
                 cublas, CUBLAS_OP_T, CUBLAS_OP_N,
-                rtx5090::kBspecV8, M, kInkHidden, &alpha_i,
+                rtx5090::kBspecV8, M_gemm, kInkHidden, &alpha_i,
                 w_i8, CUDA_R_8I, kInkHidden,
                 h_q8, CUDA_R_8I, kInkHidden,
                 &beta_i, d_i32, CUDA_R_32I, rtx5090::kBspecV8,
@@ -6978,6 +7012,40 @@ struct InkCudaRunner {
             rtx5090::k_ms_top_i32_s2<<<M, 256, 0, st>>>(tmp_i, tmp_v, kEvalK, d_cand_ids, d_cand_cnt, m.man.c.vocab_unpadded, rtx5090::kBspecV8, M);
             rtx5090::k_ink_screen_eval_q8row<<<M, 256, 0, st>>>(
                 m.d_trunk + ui.off, (int)ui.rows(), d_h_norm, d_cand_ids, d_cand_cnt, kEvalK, d_argmax, M);
+            prof_mark_end(7);
+            INK_CK(cudaMemcpyAsync(h_out_ids, d_argmax, (size_t)M * 4, cudaMemcpyDeviceToHost, st));
+            INK_CK(cudaStreamSynchronize(st));
+            return;
+        }
+        // RTX 5090 fast FMT_BF16 / FMT_S6_K argmax (SQv2-20): INT8 Tensor Core screen on m.unembed_screen.q8 + exact eval on Top-64 (~0.15 ms vs 0.48 ms!)
+        if ((ui.fmt == FMT_BF16 || ui.fmt == FMT_S6_K) && m.unembed_screen.ready && max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu) &&
+            !m.ls_active && M > 0 && (((M + 3) & ~3) <= screen_cap) && d_dot_hat != nullptr) {
+            constexpr int kEvalK = 64;
+            const int M_pad = (M + 3) & ~3;
+            int8_t*  h_q8 = reinterpret_cast<int8_t*>(d_x_bf16);
+            float*   h_sc = d_h_norm2;
+            int32_t* d_i32 = reinterpret_cast<int32_t*>(d_dot_hat);
+            int32_t* tmp_i = reinterpret_cast<int32_t*>(d_ctrl_cat);
+            float*   tmp_v = d_ctrl_cat + (size_t)M * 512;
+            rtx5090::k_ms_quant_h_q8<<<M, 256, 0, st>>>(d_h_norm, h_q8, h_sc, M);
+            if (M_pad > M) INK_CK(cudaMemsetAsync(h_q8 + (size_t)M * kInkHidden, 0, (size_t)(M_pad - M) * kInkHidden, st));
+            const int32_t alpha_i = 1, beta_i = 0;
+            INK_CUBLAS_CK(cublasGemmEx(
+                cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                rtx5090::kBspecV8, M_pad, kInkHidden, &alpha_i,
+                m.unembed_screen.q8, CUDA_R_8I, kInkHidden,
+                h_q8, CUDA_R_8I, kInkHidden,
+                &beta_i, d_i32, CUDA_R_32I, rtx5090::kBspecV8,
+                CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            rtx5090::k_ms_top_i32_s1<<<dim3(64, M), 256, 0, st>>>(d_i32, m.unembed_screen.sc, h_sc, rtx5090::kBspecV8, tmp_i, tmp_v, M);
+            rtx5090::k_ms_top_i32_s2<<<M, 256, 0, st>>>(tmp_i, tmp_v, kEvalK, d_cand_ids, d_cand_cnt, m.man.c.vocab_unpadded, rtx5090::kBspecV8, M);
+            if (ui.fmt == FMT_BF16) {
+                k_ink_screen_eval_bf16<<<M, 256, 0, st>>>(
+                    reinterpret_cast<const uint16_t*>(m.d_trunk + ui.off), d_h_norm, d_cand_ids, d_cand_cnt, kEvalK, d_argmax, M);
+            } else {
+                k_ink_screen_eval_s6k<<<M, 256, 0, st>>>(
+                    m.d_trunk + ui.off, d_h_norm, d_cand_ids, d_cand_cnt, kEvalK, d_argmax, M);
+            }
             prof_mark_end(7);
             INK_CK(cudaMemcpyAsync(h_out_ids, d_argmax, (size_t)M * 4, cudaMemcpyDeviceToHost, st));
             INK_CK(cudaStreamSynchronize(st));
@@ -7092,6 +7160,8 @@ struct InkCudaRunner {
     // Full exact softcapped logits [n_want, 200058] for selected hidden rows in d_h_src -> d_logits
     // PERF-STEP: the exact top-128 keys of ONE row through the INT8 screening index (ink_head_screen.cuh); false = run the full head instead (no index, not BF16, or the guard fired)
     HeadScreen hs;
+    uint8_t* d_cublas_ws_5090 = nullptr;
+    bool dpol_short_kv = false;
     bool head_screen_cands(const float* d_h, InkTopkScratch& tk) {
         const auto& ui = m.tinfo("model.llm.unembed.weight");
         if (ui.fmt != FMT_BF16 || !m.unembed_screen.ready || m.unembed_screen.borrowed || m.unembed_screen.eps == nullptr) return false;
@@ -7140,6 +7210,11 @@ struct InkCudaRunner {
 
     void free_all() {
         hs.free_all();
+        if (d_cublas_ws_5090) {
+            if (cublas) cublasSetWorkspace(cublas, nullptr, 0);
+            cudaFree(d_cublas_ws_5090);
+            d_cublas_ws_5090 = nullptr;
+        }
         fp8_sm.free_all();
         fp8_eng.free_all();
         elastic_kv.free_all();

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "ink_pdl.cuh"
+#include "ink_attn_tc.cuh"
 #include "ink_topk.cuh"
 
 namespace strata::ink::pdl {
@@ -71,6 +72,7 @@ inline void register_all() {
     ADD(rtx5090::k_ink_gemv_multi_fp8_m1_l1);
     ADD(rtx5090::k_ink_gemv_multi_fp8_smallM_l1<4>);
     ADD(rtx5090::k_ink_gemv_multi_fp8_smallM_l1<8>);
+    ADD(rtx5090::k_ink_gemv_multi_fp8_smallM_l1<16>);
     ADD(rtx5090::k_ink_f32_to_h2);
     ADD(rtx5090::k_ink_f32_sink_sconv_fused<1>);
     ADD(rtx5090::k_ink_f32_sink_sconv_fused<4>);
@@ -100,6 +102,37 @@ inline void register_all() {
     ADD(rtx5090::k_ink_ctrl_1x_apply_fp8<4>);
     ADD(rtx5090::k_ink_ctrl_1x_apply_fp8<8>);
     ADD(rtx5090::k_ink_ctrl_1x_apply_fp8<16>);
+    // 5090 tree-verify & small-M kernels (registered only when 5090 draft-policy switch is active)
+    if (rtx5090::draftpol_on()) {
+        ADD(k_ink_sconv4_tree);
+        ADD(k_ink_moe_reduce8_sconv_tree);
+        ADD(k_ink_flash_gqa_splitk);
+        ADD(k_ink_flash_gqa_merge);
+        ADD(rtx5090::k_ink_attn_res_3x_fused_1cta<false>);
+        ADD(rtx5090::k_ink_attn_res_3x_fused_1cta<true>);
+        ADD(rtx5090::k_ink_flash_gqa_splitk_deep);
+        ADD(rtx5090::k_ink_flash_swa_tree_shared);
+        ADD(rtx5090::k_ink_flash_gqa_merge_h2);
+        ADD(rtx5090::k_ink_moe_reduce8_sconv_tree_32);
+        ADD(rtx5090::k_ink_router_topk8_bin_fused);
+        ADD(rtx5090::k_moe_sf4_grouped_reg_gu);
+        ADD(rtx5090::k_moe_sf4_grouped_reg_dn);
+        ADD(tcattn::k_ink_attn_tc<0, 1, 1>);
+        ADD(tcattn::k_ink_attn_tc<0, 1, 2>);
+        ADD(tcattn::k_ink_attn_tc<0, 1, 3>);
+        ADD(tcattn::k_ink_attn_tc<0, 2, 1>);
+        ADD(tcattn::k_ink_attn_tc<0, 2, 2>);
+        ADD(tcattn::k_ink_attn_tc<0, 2, 3>);
+        ADD(tcattn::k_ink_attn_tc<1, 1, 1>);
+        ADD(tcattn::k_ink_attn_tc<1, 1, 2>);
+        ADD(tcattn::k_ink_attn_tc<1, 1, 3>);
+        ADD(tcattn::k_ink_attn_tc<1, 2, 1>);
+        ADD(tcattn::k_ink_attn_tc<1, 2, 2>);
+        ADD(tcattn::k_ink_attn_tc<1, 2, 3>);
+        ADD(tcattn::k_ink_tc_merge<false>);
+        ADD(tcattn::k_ink_tc_merge<true>);
+        sm120::register_pdl_kernels(add_raw);
+    }
 }
 
 #undef ADD

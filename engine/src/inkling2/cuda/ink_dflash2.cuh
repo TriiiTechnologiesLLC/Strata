@@ -86,17 +86,26 @@ struct InkDFlash2 {
     float* d_tail = nullptr;
     int32_t* d_ids = nullptr;
     float* d_conf = nullptr;
+    df2::Df2Fork5090* d_fork = nullptr;
     int32_t* h_ids = nullptr;
     float* h_conf = nullptr;
+    df2::Df2Fork5090* h_fork = nullptr;
     // ingest scratch
     static constexpr int kCh = 256;
     __nv_bfloat16 *d_ix_bf = nullptr, *d_icn_bf = nullptr;
-    float *d_ic = nullptr, *d_ikc = nullptr, *d_ivc = nullptr;
+    float *d_ic = nullptr, *d_ikc = nullptr, *d_ivc = nullptr, *d_ikvc = nullptr, *d_kvb = nullptr;
     int32_t* d_ing = nullptr;   // [3][max_batch_rows]: src rows, slots, positions
     static constexpr int kStageRing = 32;
     int32_t* h_stage = nullptr;
     size_t stage_stride = 0;
     int stage_idx = 0;
+    bool single_tile_b1 = false;
+    cublasHandle_t df2_cublas = nullptr;
+    uint8_t* d_cublas_ws = nullptr;
+    cudaGraphExec_t draft_b1_graph = nullptr;
+    bool draft_b1_graph_tried = false;
+    std::vector<int32_t> ing_src_, ing_sl_, ing_ps_, ing_cnt_, ing_seq_sl_, ing_seq_ps_;
+    std::vector<int64_t> ing_mx_, ing_mn_;
     // stats (STRATA_INK_DFLASH2_PROF=1: GPU time of the ingest and draft calls, printed every 200 drafts and at exit)
     long n_drafts_run = 0, n_ingest_rows = 0;
     bool prof = std::getenv("STRATA_INK_DFLASH2_PROF") != nullptr;
@@ -226,6 +235,7 @@ struct InkDFlash2 {
             (void)ink_cuda_mem_info(&vf, &vt);
             const bool small_vram = m.all_sf4_vram || (vt > 0 && vt < (24ull << 30));
             var = df2_variant(small_vram);
+            if (df2_5090_c1_mix_wanted(m.primary_gpu, max_slots)) { var.attn = 1; var.ffn = 3; }
             w4 = (var.attn == 2 || var.ffn == 2);
             expand_bf16 = (var.attn == 0 && var.ffn == 0);   // the format the card's row asks for is bf16: a pre-quantized sidecar is expanded to it
         }
@@ -483,7 +493,8 @@ struct InkDFlash2 {
         d_gsel = sal<float>((size_t)R * kRank);
         d_hq8 = sal<int8_t>((size_t)R7p * kHidden);
         d_hsc = sal<float>((size_t)R7p);
-        d_tile = sal<int32_t>((size_t)R7p * vt_nom);
+        single_tile_b1 = (!f32 && max_slots == 1 && screen_cublas && ink_5090_draftpol_on(m.primary_gpu) && ((V_gemm + kTopChunk - 1) / kTopChunk) <= 64);
+        d_tile = sal<int32_t>((size_t)R7p * (single_tile_b1 ? V_gemm : vt_nom));
         d_part = sal<float2>((size_t)R7 * 64 * kTopK);
         d_part_lse = sal<float2>((size_t)R7 * 64);
         d_cand = sal<int32_t>((size_t)R7 * 2 * kTopK);
@@ -499,6 +510,18 @@ struct InkDFlash2 {
         d_ic = sal<float>((size_t)kCh * kHidden);
         d_ikc = sal<float>((size_t)kCh * kKV);
         d_ivc = sal<float>((size_t)kCh * kKV);
+        if (!f32 && max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) {
+            d_fork = sal<df2::Df2Fork5090>((size_t)B);
+            h_fork = halloc_pinned<df2::Df2Fork5090>((size_t)B);
+            d_kvb  = sal<float>((size_t)R * 2 * kKV);
+            d_ikvc = sal<float>((size_t)kCh * 2 * kKV);
+            if (cublasCreate(&df2_cublas) == CUBLAS_STATUS_SUCCESS) {
+                cublasSetStream(df2_cublas, r.st);
+                cublasSetMathMode(df2_cublas, CUBLAS_DEFAULT_MATH);
+                d_cublas_ws = sal<uint8_t>(8ull << 20);
+                cublasSetWorkspace(df2_cublas, d_cublas_ws, 8ull << 20);
+            }
+        }
         d_ing = sal<int32_t>((size_t)3 * max_batch_rows);
         stage_stride = (size_t)std::max(3 * max_batch_rows, B * 6 + 8);
         h_stage = halloc_pinned<int32_t>(stage_stride * kStageRing);
@@ -576,14 +599,16 @@ struct InkDFlash2 {
     // Y[M][N] fp32 = X[M][K] bf16 * W[N][K]^T bf16
     void gemm_bf16(const uint16_t* W, const __nv_bfloat16* X, float* Y, int M, int N, int K) {
         const float a = 1.0f, b = 0.0f;
-        INK_CUBLAS_CK(cublasGemmEx(r.cublas, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, &a, W, CUDA_R_16BF, K, X, CUDA_R_16BF, K, &b, Y, CUDA_R_32F, N,
+        cublasHandle_t cb = df2_cublas ? df2_cublas : r.cublas;
+        INK_CUBLAS_CK(cublasGemmEx(cb, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, &a, W, CUDA_R_16BF, K, X, CUDA_R_16BF, K, &b, Y, CUDA_R_32F, N,
                                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
     // the BF16 matrices of the checkpoint (fc, K / V, convolution kernels, selector): bf16 on sm_80+; FP32 (the same values) below it. Xb is the bf16 copy of the activation, Xf the fp32 one.
     void gemm_w(const uint16_t* W, const __nv_bfloat16* Xb, const float* Xf, float* Y, int M, int N, int K) {
         if (!f32) { gemm_bf16(W, Xb, Y, M, N, K); return; }
         const float a = 1.0f, b = 0.0f;
-        INK_CUBLAS_CK(cublasGemmEx(r.cublas, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, &a, W, CUDA_R_32F, K, Xf, CUDA_R_32F, K, &b, Y, CUDA_R_32F, N,
+        cublasHandle_t cb = df2_cublas ? df2_cublas : r.cublas;
+        INK_CUBLAS_CK(cublasGemmEx(cb, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, &a, W, CUDA_R_32F, K, Xf, CUDA_R_32F, K, &b, Y, CUDA_R_32F, N,
                                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT));
     }
     // a matrix offset in elements: bf16 slots, or fp32 elements of the same matrix when f32
@@ -622,33 +647,34 @@ struct InkDFlash2 {
         if (!ready || n <= 0) return;
         // bookkeeping and the rows that can still matter (the last kKeep positions of each slot)
         constexpr int kKeep = kRingCap - 16;
-        std::vector<int32_t> src, sl, ps;
-        src.reserve(n); sl.reserve(n); ps.reserve(n);
-        std::vector<int64_t> mx(max_slots, -1), mn(max_slots, INT64_MAX);
-        std::vector<int> cnt(max_slots, 0);
+        ing_src_.clear(); ing_sl_.clear(); ing_ps_.clear();
+        if ((int)ing_src_.capacity() < n) { ing_src_.reserve(n); ing_sl_.reserve(n); ing_ps_.reserve(n); }
+        ing_mx_.assign(max_slots, -1);
+        ing_mn_.assign(max_slots, INT64_MAX);
+        ing_cnt_.assign(max_slots, 0);
         for (int i = 0; i < n; ++i) {
             const int s = h_slot[i];
             if (s < 0 || s >= max_slots) continue;
-            mx[s] = std::max<int64_t>(mx[s], h_pos[i]);
-            mn[s] = std::min<int64_t>(mn[s], h_pos[i]);
-            ++cnt[s];
+            ing_mx_[s] = std::max<int64_t>(ing_mx_[s], h_pos[i]);
+            ing_mn_[s] = std::min<int64_t>(ing_mn_[s], h_pos[i]);
+            ++ing_cnt_[s];
         }
         for (int s = 0; s < max_slots; ++s) {
-            if (cnt[s] == 0) continue;
+            if (ing_cnt_[s] == 0) continue;
             if (!ensure_slot(s)) continue;
-            if (mn[s] != hi[s]) lo[s] = mn[s];
-            hi[s] = mx[s] + 1;
+            if (ing_mn_[s] != hi[s]) lo[s] = ing_mn_[s];
+            hi[s] = ing_mx_[s] + 1;
             lo[s] = std::max<int64_t>(lo[s], hi[s] - kKeep);
         }
         for (int i = 0; i < n; ++i) {
             const int s = h_slot[i];
             if (s < 0 || s >= max_slots || slot_dead[s]) continue;
             if (h_pos[i] < hi[s] - kKeep) continue;
-            src.push_back(h_src ? h_src[i] : i);
-            sl.push_back(s);
-            ps.push_back(h_pos[i]);
+            ing_src_.push_back(h_src ? h_src[i] : i);
+            ing_sl_.push_back(s);
+            ing_ps_.push_back(h_pos[i]);
         }
-        const int nn = (int)src.size();
+        const int nn = (int)ing_src_.size();
         if (nn == 0) return;
         n_ingest_rows += nn;
         cudaEvent_t pe0 = nullptr, pe1 = nullptr;
@@ -657,9 +683,9 @@ struct InkDFlash2 {
         const int cap_rows = max_batch_rows;
         for (int off = 0; off < nn; off += cap_rows) {
             const int nb = std::min(cap_rows, nn - off);
-            std::memcpy(st, src.data() + off, (size_t)nb * 4);
-            std::memcpy(st + nb, sl.data() + off, (size_t)nb * 4);
-            std::memcpy(st + 2 * nb, ps.data() + off, (size_t)nb * 4);
+            std::memcpy(st, ing_src_.data() + off, (size_t)nb * 4);
+            std::memcpy(st + nb, ing_sl_.data() + off, (size_t)nb * 4);
+            std::memcpy(st + 2 * nb, ing_ps_.data() + off, (size_t)nb * 4);
             int32_t* d_src = d_ing;
             int32_t* d_sl = d_ing + nb;
             int32_t* d_ps = d_ing + 2 * nb;
@@ -671,10 +697,20 @@ struct InkDFlash2 {
                 gemm_w(fc, d_ix_bf, d_ix_f, d_ic, cn, kHidden, kTargets * kHidden);
                 k_ink_rms_norm<<<cn, 256, 0, r.st>>>(d_ic, hidden_norm, f32 ? d_icn_f : nullptr, f32 ? nullptr : d_icn_bf, cn, kHidden);
                 for (int l = 0; l < kLayers; ++l) {
-                    gemm_w(L[l].wkv, d_icn_bf, d_icn_f, d_ikc, cn, kKV, kHidden);
-                    gemm_w(woff(L[l].wkv, (size_t)kKV * kHidden), d_icn_bf, d_icn_f, d_ivc, cn, kKV, kHidden);
-                    k_df2_rmsnorm_rope<<<dim3(kKvHeads, cn), 128, 0, r.st>>>(d_ikc, L[l].k_norm, d_ps + c0, theta, cn, kKvHeads);
-                    k_df2_ring_write<<<cn, 256, 0, r.st>>>(d_ikc, d_ivc, d_sl + c0, d_ps + c0, l, d_rk_tab, d_rv_tab, cn);
+                    if (d_ikvc != nullptr) {
+                        if (!f32 && cn <= 8) {
+                            k_df2_gemv_bf16_smallM<8><<<(2 * kKV + 7) / 8, 128, 0, r.st>>>(L[l].wkv, d_icn_bf, d_ikvc, cn, 2 * kKV);
+                        } else {
+                            gemm_w(L[l].wkv, d_icn_bf, d_icn_f, d_ikvc, cn, 2 * kKV, kHidden);
+                        }
+                        k_df2_rmsnorm_rope_ring_write<<<dim3(kKvHeads, cn), 128, 0, r.st>>>(
+                            d_ikvc, L[l].k_norm, d_sl + c0, d_ps + c0, theta, l, d_rk_tab, d_rv_tab, cn);
+                    } else {
+                        gemm_w(L[l].wkv, d_icn_bf, d_icn_f, d_ikc, cn, kKV, kHidden);
+                        gemm_w(woff(L[l].wkv, (size_t)kKV * kHidden), d_icn_bf, d_icn_f, d_ivc, cn, kKV, kHidden);
+                        k_df2_rmsnorm_rope<<<dim3(kKvHeads, cn), 128, 0, r.st>>>(d_ikc, L[l].k_norm, d_ps + c0, theta, cn, kKvHeads);
+                        k_df2_ring_write<<<cn, 256, 0, r.st>>>(d_ikc, d_ivc, d_sl + c0, d_ps + c0, l, d_rk_tab, d_rv_tab, cn);
+                    }
                 }
             }
             // the pinned stage is read by the async copy above; the ring of kStageRing buffers keeps the next calls off it
@@ -684,9 +720,10 @@ struct InkDFlash2 {
     }
 
     void ingest_seq(const float* const taps[4], int slot, int p0, int M) {
-        std::vector<int32_t> sl(M, slot), ps(M);
-        for (int i = 0; i < M; ++i) ps[i] = p0 + i;
-        ingest(taps, nullptr, sl.data(), ps.data(), M);
+        ing_seq_sl_.assign(M, slot);
+        ing_seq_ps_.resize(M);
+        for (int i = 0; i < M; ++i) ing_seq_ps_[i] = p0 + i;
+        ingest(taps, nullptr, ing_seq_sl_.data(), ing_seq_ps_.data(), M);
     }
 
     // the context of a slot is gone (a conversation was restored, the slot was reused): drafts see no context until the next ingest
@@ -698,11 +735,111 @@ struct InkDFlash2 {
     // ---- the draft --------------------------------------------------------------------------------------------------------
     static int split_for(int B) { return std::max(1, std::min(df2::kMaxSplit, 24 / std::max(1, B))); }
 
+    void emit_draft_body(int B) {
+        using namespace df2;
+        const int R = B * kBlock, R7 = B * kDraft;
+        const int32_t* d_anchor = d_meta + B * 4;
+        const auto& ei = m.tinfo("model.llm.embed.weight");
+        k_ink_embed_norm<<<B, 256, 0, r.st>>>(m.embed_ptr(), ei.fmt, (const float*)m.trunk_ptr("model.llm.embed_norm.weight"), d_anchor, nullptr, nullptr,
+                                              d_anchor_emb, B, kHidden);
+        k_df2_build_x<<<R, 256, 0, r.st>>>(d_anchor_emb, mask_row, d_x, B);
+        k_df2_block_pos<<<(R + 127) / 128, 128, 0, r.st>>>(d_meta, B, d_pos, d_srow);
+        const int split = split_for(B);
+        const bool fast_bf16_r8 = (!f32 && B == 1 && max_slots == 1 && R == 8 && ink_5090_draftpol_on(m.primary_gpu));
+        for (int l = 0; l < kLayers; ++l) {
+            const Layer& y = L[l];
+            // ---- attention sublayer
+            k_ink_rms_norm<<<R, 256, 0, r.st>>>(d_x, y.attn_norm, d_xn, d_xn_bf, R, kHidden);
+            if (fast_bf16_r8) k_df2_gemv_bf16_smallM<8><<<(kDyn + 7) / 8, 128, 0, r.st>>>(y.conv_a, d_xn_bf, d_dyn, R, kDyn);
+            else              gemm_w(y.conv_a, d_xn_bf, d_xn, d_dyn, R, kDyn, kHidden);
+            k_df2_conv_pre<<<R, 256, 0, r.st>>>(d_xn, d_dyn, y.base_a, d_c, d_c_bf, R);
+            mv(y.wq, y.sq, y.kq, y.oq, d_c, d_q, R, kQ, kHidden);
+            k_df2_rmsnorm_rope<<<dim3(kHeads, R), 128, 0, r.st>>>(d_q, y.q_norm, d_pos, theta, R, kHeads);
+            if (d_kvb != nullptr) {
+                if (fast_bf16_r8) k_df2_gemv_bf16_smallM<8><<<(2 * kKV + 7) / 8, 128, 0, r.st>>>(y.wkv, d_c_bf, d_kvb, R, 2 * kKV);
+                else              gemm_w(y.wkv, d_c_bf, d_c, d_kvb, R, 2 * kKV, kHidden);
+                k_df2_rmsnorm_rope_ring_write<<<dim3(kKvHeads, R), 128, 0, r.st>>>(
+                    d_kvb, y.k_norm, d_srow, d_pos, theta, l, d_rk_tab, d_rv_tab, R);
+            } else {
+                gemm_w(y.wkv, d_c_bf, d_c, d_kb, R, kKV, kHidden);
+                gemm_w(woff(y.wkv, (size_t)kKV * kHidden), d_c_bf, d_c, d_vb, R, kKV, kHidden);
+                k_df2_rmsnorm_rope<<<dim3(kKvHeads, R), 128, 0, r.st>>>(d_kb, y.k_norm, d_pos, theta, R, kKvHeads);
+                // block rows' K / V into the ring (cells of their positions), then attend
+                k_df2_ring_write<<<R, 256, 0, r.st>>>(d_kb, d_vb, d_srow, d_pos, l, d_rk_tab, d_rv_tab, R);
+            }
+            k_df2_attn_part<<<dim3(kKvHeads, B, split), 256, 0, r.st>>>(d_q, d_rk_tab, d_rv_tab, d_meta, d_meta + B * 5, l, split, p_m, p_l, p_o);
+            k_df2_attn_combine<<<dim3(kKvHeads, B, 32), 128, 0, r.st>>>(p_m, p_l, p_o, split, d_attn);
+            mv(y.wo, y.so, y.ko, y.oo, d_attn, d_z, R, kHidden, kQ);
+            k_df2_conv_post_add<<<R, 256, 0, r.st>>>(d_z, d_dyn, y.base_a, d_x, R);
+            // ---- feed-forward sublayer
+            k_ink_rms_norm<<<R, 256, 0, r.st>>>(d_x, y.post_norm, d_xn, d_xn_bf, R, kHidden);
+            if (fast_bf16_r8) k_df2_gemv_bf16_smallM<8><<<(kDyn + 7) / 8, 128, 0, r.st>>>(y.conv_f, d_xn_bf, d_dyn, R, kDyn);
+            else              gemm_w(y.conv_f, d_xn_bf, d_xn, d_dyn, R, kDyn, kHidden);
+            k_df2_conv_pre<<<R, 256, 0, r.st>>>(d_xn, d_dyn, y.base_f, d_c, nullptr, R);
+            // gate and up share the quantized activation
+            if (!f32 && max_slots == 1 && R <= 8 && y.kg == 3 && y.ku == 3 && ink_5090_draftpol_on(m.primary_gpu)) {
+                k_df2_quant_act<<<dim3((kHidden / 32 + 7) / 8, R), 256, 0, r.st>>>(d_c, d_aq, d_as, R, kHidden, 0);
+                k_df2_gemv_sf4_swiglu8<<<(kFF + 7) / 8, 256, (size_t)9 * kHidden + 16, r.st>>>(
+                    (const uint8_t*)y.wg, (const uint8_t*)y.sg, y.og,
+                    (const uint8_t*)y.wu, (const uint8_t*)y.su, y.ou,
+                    d_aq, d_as, d_act, R, kFF, kHidden);
+            } else {
+                mv(y.wg, y.sg, y.kg, y.og, d_c, d_g, R, kFF, kHidden);
+                mv(y.wu, y.su, y.ku, y.ou, d_c, d_u, R, kFF, kHidden, false);
+                k_df2_swiglu<<<(unsigned)(((size_t)R * kFF + 255) / 256), 256, 0, r.st>>>(d_g, d_u, d_act, (size_t)R * kFF);
+            }
+            mv(y.wd, y.sd, y.kd, y.od, d_act, d_z, R, kHidden, kFF);
+            k_df2_conv_post_add<<<R, 256, 0, r.st>>>(d_z, d_dyn, y.base_f, d_x, R);
+        }
+        // ---- head
+        k_ink_rms_norm<<<R, 256, 0, r.st>>>(d_x, norm, d_hd, d_hd_bf, R, kHidden);
+        if (fast_bf16_r8) k_df2_gemv_bf16_smallM<8><<<(kRank + 7) / 8, 128, 0, r.st>>>(sel_h, d_hd_bf, d_gsel, R, kRank);
+        else              gemm_w(sel_h, d_hd_bf, d_hd, d_gsel, R, kRank, kHidden);
+        const int R7p = ((R7 + 3) / 4) * 4;
+        if (fast_bf16_r8) {
+            k_df2_quant_h_q8_b1<<<kDraft, 256, 0, r.st>>>(d_hd, d_hq8, d_hsc);
+        } else {
+            k_dspark_quant_h_q8_slots<<<R7, 256, 0, r.st>>>(d_hd, d_hq8, d_hsc, B, kDraft);
+            if (R7p > R7) INK_CK(cudaMemsetAsync(d_hq8 + (size_t)R7 * kHidden, 0, (size_t)(R7p - R7) * kHidden, r.st));
+        }
+        const int32_t ialpha = 1, ibeta = 0;
+        cublasHandle_t cb = df2_cublas ? df2_cublas : r.cublas;
+        int chunk_base = 0;
+        if (B == 1 && single_tile_b1 && screen_cublas) {
+            INK_CUBLAS_CK(cublasGemmEx(cb, CUBLAS_OP_T, CUBLAS_OP_N, V_gemm, R7p, kHidden, &ialpha, m.unembed_screen.q8, CUDA_R_8I,
+                                       kHidden, d_hq8, CUDA_R_8I, kHidden, &ibeta, d_tile, CUDA_R_32I, V_gemm, CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            const int nchunk = (V_gemm + kTopChunk - 1) / kTopChunk;
+            k_df2_tile_part<<<dim3(nchunk, R7), 256, 0, r.st>>>(d_tile, m.unembed_screen.sc, d_hsc, 0, V_gemm, V, cap, 0, d_part, d_part_lse);
+            chunk_base = nchunk;
+        } else {
+            for (int ti = 0; ti < 8; ++ti) {
+                const int v0 = ti * vt_nom;
+                const int vt = std::max(0, std::min(vt_nom, V_gemm - v0));
+                if (vt <= 0) continue;
+                if (screen_cublas) {
+                    INK_CUBLAS_CK(cublasGemmEx(cb, CUBLAS_OP_T, CUBLAS_OP_N, vt, R7p, kHidden, &ialpha, m.unembed_screen.q8 + (size_t)v0 * kHidden, CUDA_R_8I,
+                                               kHidden, d_hq8, CUDA_R_8I, kHidden, &ibeta, d_tile, CUDA_R_32I, vt, CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+                } else {
+                    k_df2_screen_gemm<<<(vt + 7) / 8, 256, 0, r.st>>>(m.unembed_screen.q8 + (size_t)v0 * kHidden, d_hq8, d_tile, vt, R7p);
+                }
+                const int nchunk = (vt + kTopChunk - 1) / kTopChunk;
+                k_df2_tile_part<<<dim3(nchunk, R7), 256, 0, r.st>>>(d_tile, m.unembed_screen.sc, d_hsc, v0, vt, V, cap, chunk_base, d_part, d_part_lse);
+                chunk_base += nchunk;
+            }
+        }
+        k_df2_top16_merge<<<R7, 512, 0, r.st>>>(d_part, d_part_lse, chunk_base, V, cap, d_cand, d_tail);
+        if (B == 1 && max_slots == 1 && ink_5090_draftpol_on(m.primary_gpu)) {
+            k_df2_select_5090<<<1, 512, 0, r.st>>>(d_meta, d_cand, d_tail, d_gsel, pred, succ, kDraft, V, cap, d_ids, d_conf, d_fork);
+        } else {
+            k_df2_select<<<B, 512, 0, r.st>>>(d_meta, d_cand, d_tail, d_gsel, pred, succ, kDraft, V, cap, d_ids, d_conf);
+        }
+    }
+
     // B slots: slots[b], anchor tokens, block start positions pos0[b] (the anchor's position). out_ids / out_conf [B][7]. Returns false when nothing was drafted.
-    bool draft(int B, const int32_t* slots, const int32_t* anchors, const int32_t* pos0, int32_t* out_ids, float* out_conf, const int32_t* ctx_hi = nullptr) {
+    bool draft(int B, const int32_t* slots, const int32_t* anchors, const int32_t* pos0, int32_t* out_ids, float* out_conf, const int32_t* ctx_hi = nullptr,
+               df2::Df2Fork5090* out_fork = nullptr) {
         using namespace df2;
         if (!ready || B <= 0 || B > max_slots) return false;
-        const int R = B * kBlock, R7 = B * kDraft;
         for (int b = 0; b < B; ++b)
             if (!ensure_slot(slots[b])) return false;
         int32_t* st = h_stage + (size_t)(stage_idx++ % kStageRing) * stage_stride;
@@ -722,71 +859,54 @@ struct InkDFlash2 {
         cudaEvent_t de0 = nullptr, de1 = nullptr;
         if (prof) { cudaEventCreate(&de0); cudaEventCreate(&de1); cudaEventRecord(de0, r.st); }
         INK_CK(cudaMemcpyAsync(d_meta, st, (size_t)(B * 4 + 2 * B) * 4, cudaMemcpyHostToDevice, r.st));
-        const int32_t* d_anchor = d_meta + B * 4;
-        const auto& ei = m.tinfo("model.llm.embed.weight");
-        k_ink_embed_norm<<<B, 256, 0, r.st>>>(m.embed_ptr(), ei.fmt, (const float*)m.trunk_ptr("model.llm.embed_norm.weight"), d_anchor, nullptr, nullptr,
-                                              d_anchor_emb, B, kHidden);
-        k_df2_build_x<<<R, 256, 0, r.st>>>(d_anchor_emb, mask_row, d_x, B);
-        k_df2_block_pos<<<(R + 127) / 128, 128, 0, r.st>>>(d_meta, B, d_pos, d_srow);
-        const int split = split_for(B);
-        for (int l = 0; l < kLayers; ++l) {
-            const Layer& y = L[l];
-            // ---- attention sublayer
-            k_ink_rms_norm<<<R, 256, 0, r.st>>>(d_x, y.attn_norm, d_xn, d_xn_bf, R, kHidden);
-            gemm_w(y.conv_a, d_xn_bf, d_xn, d_dyn, R, kDyn, kHidden);
-            k_df2_conv_pre<<<R, 256, 0, r.st>>>(d_xn, d_dyn, y.base_a, d_c, d_c_bf, R);
-            mv(y.wq, y.sq, y.kq, y.oq, d_c, d_q, R, kQ, kHidden);
-            gemm_w(y.wkv, d_c_bf, d_c, d_kb, R, kKV, kHidden);
-            gemm_w(woff(y.wkv, (size_t)kKV * kHidden), d_c_bf, d_c, d_vb, R, kKV, kHidden);
-            k_df2_rmsnorm_rope<<<dim3(kHeads, R), 128, 0, r.st>>>(d_q, y.q_norm, d_pos, theta, R, kHeads);
-            k_df2_rmsnorm_rope<<<dim3(kKvHeads, R), 128, 0, r.st>>>(d_kb, y.k_norm, d_pos, theta, R, kKvHeads);
-            // block rows' K / V into the ring (cells of their positions), then attend
-            k_df2_ring_write<<<R, 256, 0, r.st>>>(d_kb, d_vb, d_srow, d_pos, l, d_rk_tab, d_rv_tab, R);
-            k_df2_attn_part<<<dim3(kKvHeads, B, split), 256, 0, r.st>>>(d_q, d_rk_tab, d_rv_tab, d_meta, d_meta + B * 5, l, split, p_m, p_l, p_o);
-            k_df2_attn_combine<<<dim3(kKvHeads, B, 32), 128, 0, r.st>>>(p_m, p_l, p_o, split, d_attn);
-            mv(y.wo, y.so, y.ko, y.oo, d_attn, d_z, R, kHidden, kQ);
-            k_df2_conv_post_add<<<R, 256, 0, r.st>>>(d_z, d_dyn, y.base_a, d_x, R);
-            // ---- feed-forward sublayer
-            k_ink_rms_norm<<<R, 256, 0, r.st>>>(d_x, y.post_norm, d_xn, d_xn_bf, R, kHidden);
-            gemm_w(y.conv_f, d_xn_bf, d_xn, d_dyn, R, kDyn, kHidden);
-            k_df2_conv_pre<<<R, 256, 0, r.st>>>(d_xn, d_dyn, y.base_f, d_c, nullptr, R);
-            // gate and up share the quantized activation
-            mv(y.wg, y.sg, y.kg, y.og, d_c, d_g, R, kFF, kHidden);
-            mv(y.wu, y.su, y.ku, y.ou, d_c, d_u, R, kFF, kHidden, false);
-            k_df2_swiglu<<<(unsigned)(((size_t)R * kFF + 255) / 256), 256, 0, r.st>>>(d_g, d_u, d_act, (size_t)R * kFF);
-            mv(y.wd, y.sd, y.kd, y.od, d_act, d_z, R, kHidden, kFF);
-            k_df2_conv_post_add<<<R, 256, 0, r.st>>>(d_z, d_dyn, y.base_f, d_x, R);
-        }
-        // ---- head
-        k_ink_rms_norm<<<R, 256, 0, r.st>>>(d_x, norm, d_hd, d_hd_bf, R, kHidden);
-        gemm_w(sel_h, d_hd_bf, d_hd, d_gsel, R, kRank, kHidden);
-        const int R7p = ((R7 + 3) / 4) * 4;
-        k_dspark_quant_h_q8_slots<<<R7, 256, 0, r.st>>>(d_hd, d_hq8, d_hsc, B, kDraft);
-        if (R7p > R7) INK_CK(cudaMemsetAsync(d_hq8 + (size_t)R7 * kHidden, 0, (size_t)(R7p - R7) * kHidden, r.st));
-        const int32_t ialpha = 1, ibeta = 0;
-        int chunk_base = 0;
-        for (int ti = 0; ti < 8; ++ti) {
-            const int v0 = ti * vt_nom;
-            const int vt = std::max(0, std::min(vt_nom, V_gemm - v0));
-            if (vt <= 0) continue;
-            if (screen_cublas) {
-                INK_CUBLAS_CK(cublasGemmEx(r.cublas, CUBLAS_OP_T, CUBLAS_OP_N, vt, R7p, kHidden, &ialpha, m.unembed_screen.q8 + (size_t)v0 * kHidden, CUDA_R_8I,
-                                           kHidden, d_hq8, CUDA_R_8I, kHidden, &ibeta, d_tile, CUDA_R_32I, vt, CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-            } else {
-                k_df2_screen_gemm<<<(vt + 7) / 8, 256, 0, r.st>>>(m.unembed_screen.q8 + (size_t)v0 * kHidden, d_hq8, d_tile, vt, R7p);
+        const bool want_graph = (B == 1 && max_slots == 1 && !f32 && r.use_cuda_graph && ink_5090_draftpol_on(m.primary_gpu));
+        if (want_graph && draft_b1_graph) {
+            if (cudaGraphLaunch(draft_b1_graph, r.st) != cudaSuccess) {
+                (void)cudaGetLastError();
+                cudaGraphExecDestroy(draft_b1_graph);
+                draft_b1_graph = nullptr;
+                emit_draft_body(1);
             }
-            const int nchunk = (vt + kTopChunk - 1) / kTopChunk;
-            k_df2_tile_part<<<dim3(nchunk, R7), 256, 0, r.st>>>(d_tile, m.unembed_screen.sc, d_hsc, v0, vt, V, cap, chunk_base, d_part, d_part_lse);
-            chunk_base += nchunk;
+        } else if (want_graph && !draft_b1_graph_tried && n_drafts_run >= 1) {
+            // Capture on the 2nd draft call (dedicated df2_cublas + pre-allocated 8 MiB workspace!)
+            draft_b1_graph_tried = true;
+            df2::register_pdl_kernels();
+            cudaGraph_t gr = nullptr;
+            cudaError_t ce = cudaStreamBeginCapture(r.st, cudaStreamCaptureModeRelaxed);
+            if (ce == cudaSuccess) {
+                emit_draft_body(1);
+                ce = cudaStreamEndCapture(r.st, &gr);
+                if (ce == cudaSuccess && gr) {
+                    ce = pdl::instantiate(&draft_b1_graph, gr, "dflash2");
+                    cudaGraphDestroy(gr);
+                    gr = nullptr;
+                }
+            }
+            if (ce != cudaSuccess || !draft_b1_graph) {
+                (void)cudaGetLastError();
+                if (gr) cudaGraphDestroy(gr);
+                (void)cudaGetLastError();
+                draft_b1_graph = nullptr;
+                emit_draft_body(1);
+            } else if (cudaGraphLaunch(draft_b1_graph, r.st) != cudaSuccess) {
+                (void)cudaGetLastError();
+                cudaGraphExecDestroy(draft_b1_graph);
+                draft_b1_graph = nullptr;
+                emit_draft_body(1);
+            }
+        } else {
+            emit_draft_body(B);
         }
-        k_df2_top16_merge<<<R7, 512, 0, r.st>>>(d_part, d_part_lse, chunk_base, V, cap, d_cand, d_tail);
-        k_df2_select<<<B, 512, 0, r.st>>>(d_meta, d_cand, d_tail, d_gsel, pred, succ, kDraft, V, cap, d_ids, d_conf);
         INK_CK(cudaMemcpyAsync(h_ids, d_ids, (size_t)B * kDraft * 4, cudaMemcpyDeviceToHost, r.st));
         INK_CK(cudaMemcpyAsync(h_conf, d_conf, (size_t)B * kDraft * 4, cudaMemcpyDeviceToHost, r.st));
+        if (out_fork && d_fork && h_fork && B == 1 && max_slots == 1) {
+            INK_CK(cudaMemcpyAsync(h_fork, d_fork, sizeof(df2::Df2Fork5090), cudaMemcpyDeviceToHost, r.st));
+        }
         if (prof) cudaEventRecord(de1, r.st);
         INK_CK(cudaStreamSynchronize(r.st));
         std::memcpy(out_ids, h_ids, (size_t)B * kDraft * 4);
         std::memcpy(out_conf, h_conf, (size_t)B * kDraft * 4);
+        if (out_fork && d_fork && h_fork && B == 1 && max_slots == 1) *out_fork = h_fork[0];
         ++n_drafts_run;
         if (prof) {
             float ms = 0;
@@ -800,6 +920,11 @@ struct InkDFlash2 {
 
     void free_all() {
         if (prof) prof_print();
+        if (draft_b1_graph) { cudaGraphExecDestroy(draft_b1_graph); draft_b1_graph = nullptr; }
+        draft_b1_graph_tried = false;
+        if (df2_cublas) { cublasDestroy(df2_cublas); df2_cublas = nullptr; }
+        d_cublas_ws = nullptr;
+        d_kvb = d_ikvc = nullptr;
         for (int s = 0; s < (int)ring_k_h.size(); ++s) {
             if (ring_k_h[s]) cudaFree(ring_k_h[s]);
             if (ring_v_h[s]) cudaFree(ring_v_h[s]);
@@ -811,6 +936,7 @@ struct InkDFlash2 {
         for (void* p : owned) cudaFree(p);
         owned.clear();
         if (d_amax) { cudaFree(d_amax); d_amax = nullptr; }
+        if (h_fork) { cudaFreeHost(h_fork); h_fork = nullptr; }
         if (pred_raw) { cudaFreeHost(pred_raw); pred_raw = nullptr; }
         if (succ_raw) { cudaFreeHost(succ_raw); succ_raw = nullptr; }
         ready = false;
