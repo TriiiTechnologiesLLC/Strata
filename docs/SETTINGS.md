@@ -10,7 +10,7 @@ debugging and are kept in `terminal/data/settings-register.json`.
 A number or a word is set like any environment variable, for example `STRATA_KVA=1`. In the Terminal, `strata launch --set NAME=value`
 puts it in the model's run configuration.
 
-## Switches you can turn on (428)
+## Switches you can turn on (429)
 
 Off unless you set them. The last column says where each one is described.
 
@@ -121,6 +121,7 @@ Off unless you set them. The last column says where each one is described.
 | `STRATA_I8_MT` | number | Intel Arc | [INTEL_INT8_EXPERTS.md](INTEL_INT8_EXPERTS.md) |
 | `STRATA_I8_WG` | number | Intel Arc | [INTEL_INT8_EXPERTS.md](INTEL_INT8_EXPERTS.md) |
 | `STRATA_INK_5060TI_MACRO_BF16` | text | NVIDIA and AMD | - |
+| `STRATA_INK_5090_DRAFTPOL_EXACT` | number | NVIDIA | - |
 | `STRATA_INK_ATTN_PROBE` | on / off | NVIDIA and AMD | - |
 | `STRATA_INK_ATTN_PROBE_DUMP` | on / off | NVIDIA and AMD | - |
 | `STRATA_INK_ATTN_PROBE_DUMP_VISIT` | number | NVIDIA and AMD | - |
@@ -181,7 +182,7 @@ Off unless you set them. The last column says where each one is described.
 | `STRATA_INK_SM120_SF4_TRUNK` | number | NVIDIA | - |
 | `STRATA_INK_SM120_SPEC_COST` | text | NVIDIA | - |
 | `STRATA_INK_SM120_SPEC_PLAIN` | text | NVIDIA | - |
-| `STRATA_INK_STRIXHALO` | text | AMD | - |
+| `STRATA_INK_STRIXHALO` | on / off | AMD | - |
 | `STRATA_INK_STRIXHALO_ASYNC_CKPT` | text | AMD | - |
 | `STRATA_INK_STRIXHALO_C64` | text | AMD | - |
 | `STRATA_INK_STRIXHALO_C64_K` | number | AMD | - |
@@ -200,7 +201,7 @@ Off unless you set them. The last column says where each one is described.
 | `STRATA_INK_STRIXHALO_SCREEN_U4` | text | AMD | - |
 | `STRATA_INK_STRIXHALO_SF4_TAPS` | on / off | AMD | - |
 | `STRATA_INK_STRIXHALO_SLAB` | text | AMD | - |
-| `STRATA_INK_STRIXHALO_SWA_FUSED` | text | AMD | - |
+| `STRATA_INK_STRIXHALO_SWA_FUSED` | on / off | AMD | - |
 | `STRATA_INK_STRIXHALO_TREE16` | text | AMD | - |
 | `STRATA_INK_STRIXHALO_TRI_ENGINE` | text | AMD | - |
 | `STRATA_INK_STRIXHALO_TRUNK_Q8` | text | AMD | - |
@@ -445,7 +446,7 @@ Off unless you set them. The last column says where each one is described.
 | `STRATA_WATCHDOG_S` | text | NVIDIA and AMD, Intel Arc | [DETAILS.md](DETAILS.md) |
 | `STRATA_WDDM_BUDGET` | number | AMD, Intel Arc | [AMD_HIP.md](AMD_HIP.md) |
 
-## Switches that go back to earlier behaviour (138)
+## Switches that go back to earlier behaviour (139)
 
 These behaviours are on by default. Setting the switch returns the earlier behaviour; the notes in the register say which
 version made it the default.
@@ -484,6 +485,7 @@ version made it the default.
 | `STRATA_IGPU_DEFAULTS` | on / off | NVIDIA and AMD | v0.2.16 | [AMD_HIP.md](AMD_HIP.md) |
 | `STRATA_IGPU_PROMPT_SET` | on / off | NVIDIA and AMD | v0.2.16 | [AMD_HIP.md](AMD_HIP.md), [RADEON_780M.md](RADEON_780M.md), [release-notes-0.2.1.md](release-notes-0.2.1.md) |
 | `STRATA_IL_PAD` | number | NVIDIA and AMD | v0.2.16 | - |
+| `STRATA_INK_5090_DRAFTPOL` | text | NVIDIA | - | - |
 | `STRATA_INK_CHUNK_AUTO` | number | NVIDIA and AMD | v0.2.21 | - |
 | `STRATA_INK_EXACT_GRAPH` | on / off | NVIDIA and AMD | v0.2.21 | - |
 | `STRATA_INK_EXACT_ROWS` | on / off | AMD | v0.2.21 | - |
