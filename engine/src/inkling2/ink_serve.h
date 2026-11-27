@@ -546,6 +546,10 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend& 
     bool cand_ok = !(std::getenv("STRATA_INK_NO_CAND") && std::getenv("STRATA_INK_NO_CAND")[0] == '1');
     if (const char* e = std::getenv("STRATA_INK_PREFILL_CAP"); e && *e) prefill_cap = std::max(0, std::atoi(e));
     else prefill_cap = backend.preferred_prefill_cap_with_decoders();   // 0 on every backend except one that opts in (HIP R9700 / Strix fast mode)
+    // STRATA_INK_PREFILL_MIN_SLOT=N: with many prompts queued at once, read at least N prompt tokens of a slot per step (oldest first) instead of
+    // splitting the step's budget over all of them (default: the backend's own number, 0 on every backend except CUDA; 0 = the old split).
+    int min_slot_chunk = backend.min_prefill_tokens_per_slot();
+    if (const char* e = std::getenv("STRATA_INK_PREFILL_MIN_SLOT"); e && *e) min_slot_chunk = std::max(0, std::atoi(e));
     const bool use_dspark = (cfg.draft_mode != "off") && backend.dspark_ready();   // the backend says whether a drafter runs: DSpark from the model file, or the DFlash 2 sidecar beside it
     // STRATA_INK_SPEC=block: measurement switch, greedy requests use the linear block-8 drafter + batch verify instead of the beam tree
     const char* spec_env = std::getenv("STRATA_INK_SPEC");
@@ -902,7 +906,13 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend& 
     std::vector<int> logit_slots;
     std::vector<float> logits_buf;
 
+    const bool admit_prof = std::getenv("STRATA_INK_ADMIT_PROF") != nullptr;
+    long admit_step = 0;
+    double admit_t_end_prev = now_s();
+    double admit_ckpt_ms = 0.0;
     while (true) {
+        const double admit_t_loop0 = now_s();
+        admit_ckpt_ms = 0.0;
         // 1. Drain all queued stdin commands without blocking while any slot is active
         bool any_active = false;
         for (const auto& rq : reqs) if (rq.active) { any_active = true; break; }
@@ -1267,7 +1277,17 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend& 
                     }
                     prefill_fed[s] = take;
                 } else {
-                    const int per_slot = std::max(1, token_budget / static_cast<int>(pf_slots.size()));
+                    int per_slot = std::max(1, token_budget / static_cast<int>(pf_slots.size()));
+                    if (min_slot_chunk > 0 && per_slot < min_slot_chunk) {
+                        // A burst of prompts: serve only as many slots as the budget fills with at least min_slot_chunk tokens each, oldest request
+                        // first (the others wait for a later step), instead of a few tokens for every slot.
+                        const int n_take = std::max(1, token_budget / min_slot_chunk);
+                        if (static_cast<int>(pf_slots.size()) > n_take) {
+                            std::stable_sort(pf_slots.begin(), pf_slots.end(), [&](int a, int b) { return reqs[a].t_start < reqs[b].t_start; });
+                            pf_slots.resize(n_take);
+                        }
+                        per_slot = std::max(1, token_budget / static_cast<int>(pf_slots.size()));
+                    }
                     for (int s : pf_slots) {
                         auto& rq = reqs[s];
                         const int rem = rq.prompt_len - rq.prefill_pos;
@@ -1356,9 +1376,11 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend& 
                 if (rq.ckpt_pending && (rq.prefill_pos == rq.ckpt_at || (backend.prefers_async_prompt_ckpt() && rq.ckpt_at == rq.prompt_len - 1 && rq.prefill_pos == rq.prompt_len))) {
                     rq.ckpt_pending = false;
                     const int ckpt_pos = rq.ckpt_at;   // the prompt end - 1, or the tail-role checkpoint (#7241)
+                    const double admit_c0 = now_s();
                     if (backend.save_prompt_checkpoint(rq.slot, ckpt_pos)) {
                         rq.prompt_ckpt_prefix.assign(rq.prompt_ids.begin(), rq.prompt_ids.begin() + ckpt_pos);
                     }
+                    admit_ckpt_ms += (now_s() - admit_c0) * 1000.0;
                 }
                 if (rq.is_solo || !rq.admitted) {
                     const double ppts = step_ms > 0.0 ? (prefill_fed[s] * 1000.0 / step_ms) : 0.0;
@@ -1452,6 +1474,15 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend& 
                     else if (hit_loop) finish_req(rq, "stop");
                 }
             }
+        }
+        if (admit_prof) {
+            int n_pf_now = 0, n_pf_fed = 0, tok_fed = 0;
+            for (int s = 0; s < P; ++s) { if (prefill_fed[s] > 0) { ++n_pf_fed; tok_fed += prefill_fed[s]; } if (reqs[s].active && reqs[s].prefill_pos < reqs[s].prompt_len) ++n_pf_now; }
+            const double t_now = now_s();
+            std::fprintf(stderr, "[ADMIT] step %ld active %d prefilling %d fed_slots %d fed_tokens %d batch %d want %d fwd %.1f ms ckpt %.1f ms host_before %.1f ms host_after %.1f ms gap %.1f ms\n",
+                         ++admit_step, n_active, n_pf_now, n_pf_fed, tok_fed, batch.n_tokens, n_want, step_ms, admit_ckpt_ms,
+                         (t_step0 - admit_t_loop0) * 1000.0, (t_now - t_step0) * 1000.0 - step_ms - admit_ckpt_ms, (admit_t_loop0 - admit_t_end_prev) * 1000.0);
+            admit_t_end_prev = t_now;
         }
         if (spec_adapt && use_dspark && n_active == 1 && n_want == 1 && prefill_fed[sole_slot] == 0) {
             // one plain decode step: its whole cost, forward + host sampling + output

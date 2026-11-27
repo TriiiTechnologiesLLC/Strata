@@ -1602,11 +1602,17 @@ public:
             emit_selected_logits(loc_idx, dst_rows);
         }
 
+        static const bool admit_prof_be = std::getenv("STRATA_INK_ADMIT_PROF") != nullptr;
+        const auto admit_t0 = std::chrono::steady_clock::now();
         for (int s : multi_slots) {
             run_single_slot_seq(s, by_slot[s]);
         }
 
         INK_CK(cudaStreamSynchronize(runner_->st));
+        if (admit_prof_be && !multi_slots.empty()) {
+            std::fprintf(stderr, "[ADMITBE] tokens %d slots %zu decode_items %zu multi_slots %zu (one forward_seq each): multi part %.1f ms\n", N, slot_order.size(), dec_orig.size(), multi_slots.size(),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - admit_t0).count());
+        }
         return true;
     }
 
@@ -2254,6 +2260,10 @@ public:
     bool supports_batched_dspark() const noexcept override { return bspec_ready() || c64_k8v4_ready(); }
     bool prefers_candidate_rows() const noexcept override { return initialized_ && strata::ink::sm120_cfg(gpu_id_).fast; }
     bool batched_dspark_prefill_first() const noexcept override { return c64_k8v4_ready(); }
+    // A burst of prompts: forward_batch_impl runs one forward_seq per slot, and each forward reads every layer's weights (about 32 ms on an A40 for
+    // 8 tokens, SQ-20), so the serve loop's even split of its 512-token budget over 64 slots (8 tokens each) costs 64 forwards per step.
+    // 128 tokens per slot per step reads the same budget in 4 forwards.
+    int min_prefill_tokens_per_slot() const noexcept override { return initialized_ ? 128 : 0; }
 
     int dspark_spec_step_batched_greedy(
         int B,

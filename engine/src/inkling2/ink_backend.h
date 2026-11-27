@@ -271,6 +271,12 @@ public:
     // 3. Default prefill token cap while other concurrent slots are actively decoding (0 = uncapped).
     virtual int preferred_prefill_cap_with_decoders() const noexcept { return 0; }
 
+    // 3b. Many prompts queued at once (a burst of simultaneous users): the serve loop splits its per-step token budget over every prefilling
+    // slot, which leaves a few tokens per slot, and a backend that runs one forward per slot pays its whole fixed cost (every layer's weights
+    // read once) for each of those few tokens.  A backend returns N > 0 here to have the loop serve fewer slots per step, oldest first, with at
+    // least N prompt tokens each (0 = the budget is split over all of them, as before).
+    virtual int min_prefill_tokens_per_slot() const noexcept { return 0; }
+
     // 4. Optional BCO pre-warm hook for streaming prefix KV warming into an idle slot.
     virtual bool supports_bco_prewarm() const noexcept { return false; }
     virtual bool bco_prewarm(int slot, const int32_t* ids, int count, std::string& err) {
