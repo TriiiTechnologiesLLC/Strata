@@ -13516,7 +13516,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 199,
+     "line": 219,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -16696,6 +16696,90 @@
    "retired_in": ""
   },
   {
+   "name": "STRATA_INK_5090_DRAFTPOL",
+   "backends": [
+    "cuda"
+   ],
+   "reads": [
+    {
+     "file": "engine/src/inkling2/cuda/ink_moe_fp4_sm120.cu",
+     "line": 4330,
+     "backend": "cuda",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_sm120_cfg.cuh",
+     "line": 244,
+     "backend": "cuda",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_sm120_cfg.cuh",
+     "line": 253,
+     "backend": "cuda",
+     "fn": "getenv"
+    }
+   ],
+   "parse": "string",
+   "default_state": null,
+   "code_default": null,
+   "engine_sets": [],
+   "engine_defaults": [],
+   "launch_files": [],
+   "launch_sets": [],
+   "launch_reads": [],
+   "doc_mentions": [],
+   "first_commit": "628baab32d",
+   "first_date": "2026-11-27",
+   "since": null,
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
+   "status": "rollback",
+   "owner": "gpu-5090-draftpolicy",
+   "note": "RTX 5090 C1 tokens-per-ms DFlash 2 draft policy and small-M PDL kernels (on by default on the 5090 row in Fast mode; 0 restores static window)",
+   "retire_after": "",
+   "retired_in": ""
+  },
+  {
+   "name": "STRATA_INK_5090_DRAFTPOL_EXACT",
+   "backends": [
+    "cuda"
+   ],
+   "reads": [
+    {
+     "file": "engine/src/inkling2/cuda/ink_moe_fp4_sm120.cu",
+     "line": 4331,
+     "backend": "cuda",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_sm120_cfg.cuh",
+     "line": 231,
+     "backend": "cuda",
+     "fn": "getenv"
+    }
+   ],
+   "parse": "int",
+   "default_state": null,
+   "code_default": "0",
+   "engine_sets": [],
+   "engine_defaults": [],
+   "launch_files": [],
+   "launch_sets": [],
+   "launch_reads": [],
+   "doc_mentions": [],
+   "first_commit": "628baab32d",
+   "first_date": "2026-11-27",
+   "since": null,
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
+   "status": "opt-in",
+   "owner": "gpu-5090-draftpolicy",
+   "note": "Exact form of STRATA_INK_5090_DRAFTPOL (1 disables the timing-dependent draft policy and lossy 5090 draftpol kernels)",
+   "retire_after": "",
+   "retired_in": ""
+  },
+  {
    "name": "STRATA_INK_ATTN_PROBE",
    "backends": [
     "cuda-hip"
@@ -16934,7 +17018,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 284,
+     "line": 289,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -17086,7 +17170,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_dflash2.cuh",
-     "line": 337,
+     "line": 347,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
@@ -17171,7 +17255,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_dflash2.cuh",
-     "line": 364,
+     "line": 374,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -17204,7 +17288,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_dflash2.cuh",
-     "line": 163,
+     "line": 172,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -17589,7 +17673,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_dflash2.cuh",
-     "line": 102,
+     "line": 111,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
@@ -17667,7 +17751,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_dflash2.cuh",
-     "line": 155,
+     "line": 164,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -17800,6 +17884,7 @@
   {
    "name": "STRATA_INK_DFLASH2_W4",
    "backends": [
+    "cuda",
     "cuda-hip",
     "hip"
    ],
@@ -17808,6 +17893,12 @@
      "file": "engine/src/inkling2/cuda/ink_dflash2_path.cuh",
      "line": 124,
      "backend": "cuda-hip",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_sm120_cfg.cuh",
+     "line": 262,
+     "backend": "cuda",
      "fn": "getenv"
     },
     {
@@ -17829,8 +17920,8 @@
    "first_commit": "d9d285068f",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "60aedcda99",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "research",
    "owner": "inkling2/cuda",
    "note": "DFlash 2 drafter tuning / format switches (weights format, slots, codebook, confidence exponent, profile, dump).",
@@ -17840,6 +17931,7 @@
   {
    "name": "STRATA_INK_DFLASH2_WQ",
    "backends": [
+    "cuda",
     "cuda-hip",
     "hip"
    ],
@@ -17854,6 +17946,12 @@
      "file": "engine/src/inkling2/cuda/ink_dflash2_path.cuh",
      "line": 130,
      "backend": "cuda-hip",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_sm120_cfg.cuh",
+     "line": 262,
+     "backend": "cuda",
      "fn": "getenv"
     },
     {
@@ -17875,7 +17973,7 @@
    "first_commit": "7a0d50b15f",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "9e8e44f9de",
+   "last_commit": "628baab32d",
    "last_date": "2026-11-27",
    "status": "research",
    "owner": "inkling2/cuda",
@@ -17893,7 +17991,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/ink_backend.h",
-     "line": 21,
+     "line": 22,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
@@ -17951,7 +18049,7 @@
    "first_commit": "32da8cf667",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "bd075a3a88",
+   "last_commit": "1d17f60ee6",
    "last_date": "2026-11-27",
    "status": "default",
    "owner": "inkling2/cuda",
@@ -18102,13 +18200,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 508,
+     "line": 513,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 508,
+     "line": 513,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
@@ -18325,7 +18423,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 37,
+     "line": 38,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18358,7 +18456,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1274,
+     "line": 1280,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18688,13 +18786,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 223,
+     "line": 228,
      "backend": "cuda-hip",
      "fn": "env_get"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 224,
+     "line": 229,
      "backend": "cuda-hip",
      "fn": "env_get"
     }
@@ -18859,13 +18957,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_rtx5090_kernels.cuh",
-     "line": 3458,
+     "line": 3851,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
    ],
    "parse": "flag",
-   "default_state": "off",
+   "default_state": null,
    "code_default": null,
    "engine_sets": [],
    "engine_defaults": [],
@@ -18876,8 +18974,8 @@
    "first_commit": "dc80279754",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "dc80279754",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "inkling2/cuda",
    "note": "The M=1 gate+up expert kernel prefetches the expert's down matrix into L2 (PERF-STEP). Off until measured.",
@@ -19240,7 +19338,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 672,
+     "line": 678,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19306,7 +19404,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 665,
+     "line": 671,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19372,7 +19470,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_pdl.cuh",
-     "line": 220,
+     "line": 223,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19405,7 +19503,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_pdl.cuh",
-     "line": 152,
+     "line": 155,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19438,7 +19536,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_pdl.cuh",
-     "line": 151,
+     "line": 154,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19471,7 +19569,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_pdl.cuh",
-     "line": 111,
+     "line": 110,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19537,7 +19635,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_pdl.cuh",
-     "line": 110,
+     "line": 109,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19675,7 +19773,7 @@
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 677,
+     "line": 683,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20656,8 +20754,8 @@
    "first_commit": "22f73e018a",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "9188799840",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "default",
    "owner": "inkling2/cuda",
    "note": "RTX 50 (sm_120) fast mode, docs/INKLING_SM120.md. Unset: the default of the card's table row (on for the RTX 5090 and the RTX 5060 Ti 16 GB, off for every other card). =0 is the old path, =1 asks for fast mode on any card that has a row.",
@@ -20705,7 +20803,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2087,
+     "line": 2305,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20771,7 +20869,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2214,
+     "line": 2432,
      "backend": "cuda-hip",
      "fn": "env2"
     }
@@ -20804,7 +20902,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1839,
+     "line": 1694,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
+     "line": 2057,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20821,8 +20925,8 @@
    "first_commit": "1a8b39f39a",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "1a8b39f39a",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "inkling2/cuda",
    "note": "strata-inkling CUDA, RTX 50 (sm_120) fast mode (docs/INKLING_SM120.md): a tuning number or part of the fast mode; has no effect unless STRATA_INK_SM120 (or an alias) is on for a card with a measured table row.",
@@ -20837,7 +20941,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1843,
+     "line": 2061,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20870,13 +20974,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 266,
+     "line": 271,
      "backend": "cuda-hip",
      "fn": "env2"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 272,
+     "line": 277,
      "backend": "cuda-hip",
      "fn": "env2"
     }
@@ -20928,8 +21032,8 @@
    "first_commit": "22f73e018a",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "b60a5d2d0b",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "inkling2/cuda",
    "note": "RTX 50 (sm_120) exact form of the fast mode: only the parts that keep the tokens identical to the old path (RTX 5090: none, exact never changes the drafting policy; RTX 5060 Ti 16 GB: L2 prefetch only). docs/INKLING_SM120.md.",
@@ -20944,7 +21048,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_rtx5090_kernels.cuh",
-     "line": 3448,
+     "line": 3806,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20961,8 +21065,8 @@
    "first_commit": "1a8b39f39a",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "1a8b39f39a",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "inkling2/cuda",
    "note": "strata-inkling CUDA, RTX 50 (sm_120) fast mode (docs/INKLING_SM120.md): a tuning number or part of the fast mode; has no effect unless STRATA_INK_SM120 (or an alias) is on for a card with a measured table row.",
@@ -21084,7 +21188,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_rtx5090_kernels.cuh",
-     "line": 3241,
+     "line": 3436,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21150,7 +21254,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_fp4_sm120.cu",
-     "line": 4115,
+     "line": 4133,
      "backend": "cuda",
      "fn": "getenv"
     }
@@ -21183,7 +21287,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_fp4_sm120.cu",
-     "line": 4116,
+     "line": 4134,
      "backend": "cuda",
      "fn": "getenv"
     }
@@ -21216,7 +21320,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_fp4_sm120.cu",
-     "line": 4067,
+     "line": 4085,
      "backend": "cuda",
      "fn": "getenv"
     }
@@ -21249,7 +21353,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_fp4_sm120.cu",
-     "line": 4124,
+     "line": 4142,
      "backend": "cuda",
      "fn": "getenv"
     }
@@ -21282,7 +21386,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1687,
+     "line": 1690,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
+     "line": 1905,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21299,8 +21409,8 @@
    "first_commit": "1a8b39f39a",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "1a8b39f39a",
-   "last_date": "2026-11-26",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "inkling2/cuda",
    "note": "strata-inkling CUDA, RTX 50 (sm_120) fast mode (docs/INKLING_SM120.md): a tuning number or part of the fast mode; has no effect unless STRATA_INK_SM120 (or an alias) is on for a card with a measured table row.",
@@ -21516,19 +21626,19 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 416,
+     "line": 421,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 462,
+     "line": 467,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1877,
+     "line": 2095,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21561,19 +21671,19 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 417,
+     "line": 422,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 463,
+     "line": 468,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1879,
+     "line": 2097,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21606,7 +21716,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 423,
+     "line": 428,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21623,8 +21733,8 @@
    "first_commit": "e0ab3e241f",
    "first_date": "2026-11-23",
    "since": "v0.2.21",
-   "last_commit": "0ac2242558",
-   "last_date": "2026-11-23",
+   "last_commit": "628baab32d",
+   "last_date": "2026-11-27",
    "status": "research",
    "owner": "inkling2/cuda",
    "note": "strata-inkling CUDA drafter (0221 DSPARK): prints the drafter's window decisions; diagnostic.",
@@ -21639,19 +21749,19 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 418,
+     "line": 423,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 464,
+     "line": 469,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1880,
+     "line": 2098,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21717,7 +21827,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1135,
+     "line": 1141,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21750,12 +21860,18 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 89,
+     "line": 94,
+     "backend": "hip",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
+     "line": 99,
      "backend": "hip",
      "fn": "env_truthy"
     }
    ],
-   "parse": "string",
+   "parse": "flag",
    "default_state": null,
    "code_default": null,
    "engine_sets": [],
@@ -21767,8 +21883,8 @@
    "first_commit": "e4fdcef21e",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "e4fdcef21e",
-   "last_date": "2026-11-26",
+   "last_commit": "71292910c1",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "owner-hip",
    "note": "HIP opt-in for the Strix Halo (gfx1151), off by default; the master switch also checks the real card (arch, memory, name) and refuses cleanly on any other GPU.",
@@ -21783,7 +21899,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 188,
+     "line": 208,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -21816,7 +21932,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 185,
+     "line": 205,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -21849,7 +21965,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 187,
+     "line": 207,
      "backend": "hip",
      "fn": "env_int"
     }
@@ -21882,7 +21998,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 186,
+     "line": 206,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -21915,7 +22031,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 174,
+     "line": 186,
+     "backend": "hip",
+     "fn": "env_int"
+    },
+    {
+     "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
+     "line": 194,
      "backend": "hip",
      "fn": "env_int"
     }
@@ -21932,8 +22054,8 @@
    "first_commit": "e4fdcef21e",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "e4fdcef21e",
-   "last_date": "2026-11-26",
+   "last_commit": "f79ffc8cbc",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "owner-hip",
    "note": "HIP opt-in for the Strix Halo (gfx1151), off by default; the master switch also checks the real card (arch, memory, name) and refuses cleanly on any other GPU.",
@@ -21948,7 +22070,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 94,
+     "line": 104,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -21965,8 +22087,8 @@
    "first_commit": "e4fdcef21e",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "e4fdcef21e",
-   "last_date": "2026-11-26",
+   "last_commit": "71292910c1",
+   "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "owner-hip",
    "note": "HIP opt-in for the Strix Halo (gfx1151), off by default; the master switch also checks the real card (arch, memory, name) and refuses cleanly on any other GPU.",
@@ -21981,7 +22103,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 172,
+     "line": 192,
      "backend": "hip",
      "fn": "env_int"
     }
@@ -22014,7 +22136,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 200,
+     "line": 220,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22047,7 +22169,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 190,
+     "line": 210,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22080,7 +22202,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 177,
+     "line": 197,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22113,7 +22235,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 178,
+     "line": 198,
      "backend": "hip",
      "fn": "env_int"
     }
@@ -22146,7 +22268,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 196,
+     "line": 216,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22179,7 +22301,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 195,
+     "line": 215,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22212,7 +22334,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 184,
+     "line": 204,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22245,7 +22367,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 180,
+     "line": 200,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22278,7 +22400,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 181,
+     "line": 201,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22344,7 +22466,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 171,
+     "line": 191,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22377,12 +22499,18 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 176,
+     "line": 184,
+     "backend": "hip",
+     "fn": "env_truthy"
+    },
+    {
+     "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
+     "line": 196,
      "backend": "hip",
      "fn": "env_truthy"
     }
    ],
-   "parse": "string",
+   "parse": "flag",
    "default_state": null,
    "code_default": null,
    "engine_sets": [],
@@ -22394,7 +22522,7 @@
    "first_commit": "e4fdcef21e",
    "first_date": "2026-11-26",
    "since": null,
-   "last_commit": "752526d0ec",
+   "last_commit": "71292910c1",
    "last_date": "2026-11-27",
    "status": "opt-in",
    "owner": "owner-hip",
@@ -22410,7 +22538,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 179,
+     "line": 199,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22443,7 +22571,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 197,
+     "line": 217,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22476,7 +22604,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 198,
+     "line": 218,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22509,7 +22637,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 201,
+     "line": 221,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22542,7 +22670,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_strixhalo_cfg.hpp",
-     "line": 183,
+     "line": 203,
      "backend": "hip",
      "fn": "env_truthy"
     }
@@ -22701,7 +22829,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_attn_tc.cuh",
-     "line": 587,
+     "line": 590,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -22736,7 +22864,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_attn_tc.cuh",
-     "line": 580,
+     "line": 583,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -22771,7 +22899,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_attn_tc.cuh",
-     "line": 565,
+     "line": 568,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -22804,7 +22932,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 656,
+     "line": 662,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
