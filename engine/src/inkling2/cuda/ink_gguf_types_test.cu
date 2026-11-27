@@ -224,7 +224,7 @@ static int run_type(int t, int K, const Tabs& T, std::mt19937& rng) {
 }
 
 // The tensor-core prefill kernels against the dp4a kernels on one synthetic expert: 40 tokens routed to expert 0, random weights of the type, random activations.
-// GU: k_ink_moe_gu_gguf_dp4a<16> against k_ink_moe_iq_tc<true, WT>; DN: k_ink_moe_dn_gguf_dp4a<16> against k_ink_moe_iq_tc<false, 42> / k_ink_moe_q80_tc<false, 20>.
+// GU: k_ink_moe_gu_gguf_dp4a<16> against k_ink_moe_iq_tc<true, WT, 4>; DN: k_ink_moe_dn_gguf_dp4a<16> against k_ink_moe_iq_tc<false, 42, 4> / k_ink_moe_iq_tc<false, 20, 4>.
 static int run_tc_test(int wt, bool gu, std::mt19937& rng) {
     const int P = 40;
     const int Kg = kInkHidden, Kd = kInkInter;
@@ -288,18 +288,18 @@ static int run_tc_test(int wt, bool gu, std::mt19937& rng) {
         k_ink_moe_gu_gguf_dp4a<16><<<dim3(kInkInter / 4, 1), 128>>>(d_body, d_ex, tb, d_xq, d_x, d_a, 0);
         const dim3 g(kInkInter / 64, 1);
         switch (wt) {
-            case 16: k_ink_moe_iq_tc<true, 16><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
-            case 17: k_ink_moe_iq_tc<true, 17><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
-            case 18: k_ink_moe_iq_tc<true, 18><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
-            case 19: k_ink_moe_iq_tc<true, 19><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
-            case 21: k_ink_moe_iq_tc<true, 21><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
-            default: k_ink_moe_iq_tc<true, 22><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
+            case 16: k_ink_moe_iq_tc<true, 16, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
+            case 17: k_ink_moe_iq_tc<true, 17, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
+            case 18: k_ink_moe_iq_tc<true, 18, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
+            case 19: k_ink_moe_iq_tc<true, 19, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
+            case 21: k_ink_moe_iq_tc<true, 21, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
+            default: k_ink_moe_iq_tc<true, 22, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, nullptr, d_b); break;
         }
     } else {
         k_ink_moe_dn_gguf_dp4a<16><<<dim3(kInkHidden / 4, 1), 128>>>(d_body, d_ex, tb, d_xq, d_x, d_w, d_a, 0);
         const dim3 g(kInkHidden / 64, 1);
-        if (wt == 42) k_ink_moe_iq_tc<false, 42><<<g, 128>>>(d_body, d_ex, tb, d_xq, d_w, d_b);
-        else          k_ink_moe_q80_tc<false, 20><<<g, 128>>>(d_body, d_ex, tb, d_xq, d_w, d_b);
+        if (wt == 42) k_ink_moe_iq_tc<false, 42, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, d_w, d_b);
+        else          k_ink_moe_iq_tc<false, 20, 4><<<g, 128>>>(d_body, d_ex, tb, d_xq, d_w, d_b);
     }
     INK_CK(cudaGetLastError());
     INK_CK(cudaDeviceSynchronize());

@@ -1421,7 +1421,13 @@ template <int WT>
 __device__ __forceinline__ void ink_iq_wfrag(const uint8_t* row, int b, int tig, uint32_t& wlo, uint32_t& whi, float& dlo, float& dhi, float& delta) {
     const int h = tig & 1;
     delta = 0.0f;
-    if constexpr (WT == 42) {   // Q2_0: 64 values / 18 bytes, two 32-blocks per block; value (q - 1) * d
+    if constexpr (WT == 20) {   // IQ4_NL: 32 values / 18 bytes; the low nibbles of a lane's 4 bytes are k = 4*tig..+3, the high nibbles k = 16 + 4*tig..+3
+        const uint8_t* blk = row + (size_t)b * 18u;
+        const uint32_t q = ld32_u(blk + 2 + 4 * tig);
+        wlo = ink_iq4nl_lut4(q & 0x0F0F0F0Fu);
+        whi = ink_iq4nl_lut4((q >> 4) & 0x0F0F0F0Fu);
+        dlo = dhi = f16_to_f32(ld16_u(blk));
+    } else if constexpr (WT == 42) {   // Q2_0: 64 values / 18 bytes, two 32-blocks per block; value (q - 1) * d
         const uint8_t* blk = row + (size_t)(b >> 1) * 18u;
         const float d = f16_to_f32(ld16_u(blk));
         const uint8_t* qp = blk + 2 + (b & 1) * 8;
@@ -1497,7 +1503,9 @@ __device__ __forceinline__ void ink_iq_wfrag(const uint8_t* row, int b, int tig,
     }
 }
 
-template <bool GU, int WT>
+// TG token groups (8 tokens each) share every decoded weight fragment: a warp decodes the A fragments of a 32-value block once and runs TG mmas against TG sets of
+// activation fragments (the first version decoded the block again for every group of 8 tokens: 16 times for the 128 tokens an expert gets from a 2048-token chunk).
+template <bool GU, int WT, int TG>
 __global__ void __launch_bounds__(128) k_ink_moe_iq_tc(
     const uint8_t* __restrict__ sec4_base,
     const InkExpertDev* __restrict__ experts,
@@ -1506,7 +1514,7 @@ __global__ void __launch_bounds__(128) k_ink_moe_iq_tc(
     const float* __restrict__ topk_w,         // DN only
     float* __restrict__ out) {                // GU: h_f32 [P][1152]; DN: y_pair [P][2304]
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
-    static_assert(GU == (WT != 42), "the 256-value formats are the gate/up types, Q2_0 the down type of these files");
+    static_assert(GU == (WT != 42 && WT != 20), "the 256-value formats are the gate/up types, Q2_0 and IQ4_NL the down types");
     const int ai = blockIdx.y;
     if (ai >= *tb.nact) return;
     const int e = tb.active[ai];
@@ -1538,75 +1546,98 @@ __global__ void __launch_bounds__(128) k_ink_moe_iq_tc(
     }
     const int beg = tb.off[e];
     const int cnt = tb.cnt[e];
-    for (int k0 = 0; k0 < cnt; k0 += 8) {
-        const int n_e = min(8, cnt - k0);
+    for (int k0 = 0; k0 < cnt; k0 += 8 * TG) {
+        const int n_e = min(8 * TG, cnt - k0);
+        const int ngrp = (n_e + 7) >> 3;   // the groups of this step that hold tokens (warp-uniform)
         auto arow = [&](int m) -> const InkQ8_1_G32* {
             const int slot = beg + k0 + m;
             return aq + (size_t)(GU ? tb.tok_idx[slot] : slot) * NB;
         };
-        const bool vb = g < n_e;
-        const bool v0 = (2 * tig) < n_e, v1 = (2 * tig + 1) < n_e;
-        const InkQ8_1_G32* pb  = arow(vb ? g : 0);
-        const InkQ8_1_G32* pc0 = arow(v0 ? 2 * tig : 0);
-        const InkQ8_1_G32* pc1 = arow(v1 ? 2 * tig + 1 : 0);
-        float acc[NMAT][4];
+        bool vb[TG], v0[TG], v1[TG];
+        const InkQ8_1_G32* pb[TG];
+        const InkQ8_1_G32* pc0[TG];
+        const InkQ8_1_G32* pc1[TG];
+#pragma unroll
+        for (int t = 0; t < TG; ++t) {
+            const int ne_t = min(8, max(0, n_e - 8 * t));
+            vb[t] = g < ne_t;
+            v0[t] = (2 * tig) < ne_t;
+            v1[t] = (2 * tig + 1) < ne_t;
+            pb[t]  = arow(8 * t + (vb[t] ? g : 0));
+            pc0[t] = arow(8 * t + (v0[t] ? 2 * tig : 0));
+            pc1[t] = arow(8 * t + (v1[t] ? 2 * tig + 1 : 0));
+        }
+        float acc[NMAT][TG][4];
 #pragma unroll
         for (int mt = 0; mt < NMAT; ++mt)
 #pragma unroll
-            for (int i = 0; i < 4; ++i) acc[mt][i] = 0.0f;
-#pragma unroll 1
+            for (int t = 0; t < TG; ++t)
+#pragma unroll
+                for (int i = 0; i < 4; ++i) acc[mt][t][i] = 0.0f;
+#pragma unroll 2
         for (int b = 0; b < NB; ++b) {
-            const InkQ8_1_G32* xb = pb + b;
-            const uint32_t bw0 = vb ? *reinterpret_cast<const uint32_t*>(xb->qs + 4 * tig) : 0u;
-            const uint32_t bw1 = vb ? *reinterpret_cast<const uint32_t*>(xb->qs + 16 + 4 * tig) : 0u;
-            const float xd0 = v0 ? pc0[b].d : 0.0f;
-            const float xd1 = v1 ? pc1[b].d : 0.0f;
-            float xs0 = 0.0f, xs1 = 0.0f;
-            if constexpr (DELTA) { xs0 = v0 ? pc0[b].s : 0.0f; xs1 = v1 ? pc1[b].s : 0.0f; }
+            uint32_t w0l[NMAT], w0h[NMAT], w1l[NMAT], w1h[NMAT];
+            float d0l[NMAT], d0h[NMAT], d1l[NMAT], d1h[NMAT], t0[NMAT], t1[NMAT];
 #pragma unroll
             for (int mt = 0; mt < NMAT; ++mt) {
-                uint32_t w0l, w0h, w1l, w1h;
-                float d0l, d0h, d1l, d1h, t0, t1;
-                ink_iq_wfrag<WT>(wr[mt][0], b, tig, w0l, w0h, d0l, d0h, t0);
-                ink_iq_wfrag<WT>(wr[mt][1], b, tig, w1l, w1h, d1l, d1h, t1);
-                int32_t c[4] = {0, 0, 0, 0};
-                if constexpr (DUAL) {
-                    int32_t e2[4] = {0, 0, 0, 0};
-                    mma_m16n8k32_s8(c, w0l, w1l, 0u, 0u, bw0, bw1);
-                    mma_m16n8k32_s8(e2, 0u, 0u, w0h, w1h, bw0, bw1);
-                    acc[mt][0] = fmaf(d0l * xd0, (float)c[0], fmaf(d0h * xd0, (float)e2[0], acc[mt][0]));
-                    acc[mt][1] = fmaf(d0l * xd1, (float)c[1], fmaf(d0h * xd1, (float)e2[1], acc[mt][1]));
-                    acc[mt][2] = fmaf(d1l * xd0, (float)c[2], fmaf(d1h * xd0, (float)e2[2], acc[mt][2]));
-                    acc[mt][3] = fmaf(d1l * xd1, (float)c[3], fmaf(d1h * xd1, (float)e2[3], acc[mt][3]));
-                } else {
-                    mma_m16n8k32_s8(c, w0l, w1l, w0h, w1h, bw0, bw1);
-                    acc[mt][0] = fmaf(d0l * xd0, (float)c[0], acc[mt][0]);
-                    acc[mt][1] = fmaf(d0l * xd1, (float)c[1], acc[mt][1]);
-                    acc[mt][2] = fmaf(d1l * xd0, (float)c[2], acc[mt][2]);
-                    acc[mt][3] = fmaf(d1l * xd1, (float)c[3], acc[mt][3]);
-                    if constexpr (DELTA) {
-                        acc[mt][0] = fmaf(d0l * t0, xs0, acc[mt][0]);
-                        acc[mt][1] = fmaf(d0l * t0, xs1, acc[mt][1]);
-                        acc[mt][2] = fmaf(d1l * t1, xs0, acc[mt][2]);
-                        acc[mt][3] = fmaf(d1l * t1, xs1, acc[mt][3]);
+                ink_iq_wfrag<WT>(wr[mt][0], b, tig, w0l[mt], w0h[mt], d0l[mt], d0h[mt], t0[mt]);
+                ink_iq_wfrag<WT>(wr[mt][1], b, tig, w1l[mt], w1h[mt], d1l[mt], d1h[mt], t1[mt]);
+            }
+#pragma unroll
+            for (int t = 0; t < TG; ++t) {
+                if (t >= ngrp) break;
+                const InkQ8_1_G32* xb = pb[t] + b;
+                const uint32_t bw0 = vb[t] ? *reinterpret_cast<const uint32_t*>(xb->qs + 4 * tig) : 0u;
+                const uint32_t bw1 = vb[t] ? *reinterpret_cast<const uint32_t*>(xb->qs + 16 + 4 * tig) : 0u;
+                const float xd0 = v0[t] ? pc0[t][b].d : 0.0f;
+                const float xd1 = v1[t] ? pc1[t][b].d : 0.0f;
+                float xs0 = 0.0f, xs1 = 0.0f;
+                if constexpr (DELTA) { xs0 = v0[t] ? pc0[t][b].s : 0.0f; xs1 = v1[t] ? pc1[t][b].s : 0.0f; }
+#pragma unroll
+                for (int mt = 0; mt < NMAT; ++mt) {
+                    int32_t c[4] = {0, 0, 0, 0};
+                    if constexpr (DUAL) {
+                        int32_t e2[4] = {0, 0, 0, 0};
+                        mma_m16n8k32_s8(c, w0l[mt], w1l[mt], 0u, 0u, bw0, bw1);
+                        mma_m16n8k32_s8(e2, 0u, 0u, w0h[mt], w1h[mt], bw0, bw1);
+                        acc[mt][t][0] = fmaf(d0l[mt] * xd0, (float)c[0], fmaf(d0h[mt] * xd0, (float)e2[0], acc[mt][t][0]));
+                        acc[mt][t][1] = fmaf(d0l[mt] * xd1, (float)c[1], fmaf(d0h[mt] * xd1, (float)e2[1], acc[mt][t][1]));
+                        acc[mt][t][2] = fmaf(d1l[mt] * xd0, (float)c[2], fmaf(d1h[mt] * xd0, (float)e2[2], acc[mt][t][2]));
+                        acc[mt][t][3] = fmaf(d1l[mt] * xd1, (float)c[3], fmaf(d1h[mt] * xd1, (float)e2[3], acc[mt][t][3]));
+                    } else {
+                        mma_m16n8k32_s8(c, w0l[mt], w1l[mt], w0h[mt], w1h[mt], bw0, bw1);
+                        acc[mt][t][0] = fmaf(d0l[mt] * xd0, (float)c[0], acc[mt][t][0]);
+                        acc[mt][t][1] = fmaf(d0l[mt] * xd1, (float)c[1], acc[mt][t][1]);
+                        acc[mt][t][2] = fmaf(d1l[mt] * xd0, (float)c[2], acc[mt][t][2]);
+                        acc[mt][t][3] = fmaf(d1l[mt] * xd1, (float)c[3], acc[mt][t][3]);
+                        if constexpr (DELTA) {
+                            acc[mt][t][0] = fmaf(d0l[mt] * t0[mt], xs0, acc[mt][t][0]);
+                            acc[mt][t][1] = fmaf(d0l[mt] * t0[mt], xs1, acc[mt][t][1]);
+                            acc[mt][t][2] = fmaf(d1l[mt] * t1[mt], xs0, acc[mt][t][2]);
+                            acc[mt][t][3] = fmaf(d1l[mt] * t1[mt], xs1, acc[mt][t][3]);
+                        }
                     }
                 }
             }
         }
 #pragma unroll
-        for (int c = 0; c < 2; ++c) {
-            const int m = 2 * tig + c;
-            if (m < n_e) {
-                const int slot = beg + k0 + m;
+        for (int t = 0; t < TG; ++t) {
+            if (t >= ngrp) break;
 #pragma unroll
-                for (int hh = 0; hh < 2; ++hh) {
-                    const int row = r0 + g + 8 * hh;
-                    const int i = 2 * hh + c;
-                    if constexpr (GU) {
-                        out[(size_t)slot * kInkInter + row] = situ_f32(acc[0][i] * hdr->gate_scale, acc[1][i] * hdr->up_scale);
-                    } else {
-                        const int pair = tb.pairs[slot];
-                        out[(size_t)pair * kInkHidden + row] = acc[0][i] * hdr->dn_scale * topk_w[pair];
+            for (int c = 0; c < 2; ++c) {
+                const int m = 8 * t + 2 * tig + c;
+                if (m < n_e) {
+                    const int slot = beg + k0 + m;
+#pragma unroll
+                    for (int hh = 0; hh < 2; ++hh) {
+                        const int row = r0 + g + 8 * hh;
+                        const int i = 2 * hh + c;
+                        if constexpr (GU) {
+                            out[(size_t)slot * kInkInter + row] = situ_f32(acc[0][t][i] * hdr->gate_scale, acc[1][t][i] * hdr->up_scale);
+                        } else {
+                            const int pair = tb.pairs[slot];
+                            out[(size_t)pair * kInkHidden + row] = acc[0][t][i] * hdr->dn_scale * topk_w[pair];
+                        }
                     }
                 }
             }
@@ -1615,6 +1646,15 @@ __global__ void __launch_bounds__(128) k_ink_moe_iq_tc(
 #else
     (void)sec4_base; (void)experts; (void)tb; (void)aq; (void)topk_w; (void)out;
 #endif
+}
+
+template <bool GU, int WT>
+inline void launch_iq_tc(dim3 g, cudaStream_t st, int tg, const uint8_t* s4, const InkExpertDev* ex, const InkMoeTables& tb,
+                         const InkQ8_1_G32* aq, const float* tw, float* out) {
+    if (tg >= 8)      k_ink_moe_iq_tc<GU, WT, 8><<<g, 128, 0, st>>>(s4, ex, tb, aq, tw, out);
+    else if (tg >= 4) k_ink_moe_iq_tc<GU, WT, 4><<<g, 128, 0, st>>>(s4, ex, tb, aq, tw, out);
+    else if (tg >= 2) k_ink_moe_iq_tc<GU, WT, 2><<<g, 128, 0, st>>>(s4, ex, tb, aq, tw, out);
+    else              k_ink_moe_iq_tc<GU, WT, 1><<<g, 128, 0, st>>>(s4, ex, tb, aq, tw, out);
 }
 #endif  // __CUDACC__
 
@@ -4484,17 +4524,18 @@ inline void launch_ink_moe_dispatch_only(
         static const int nl_tc_on = [] { const char* e = std::getenv("STRATA_INK_IQ4NL_TC"); return !(e && e[0] == '0'); }();
         const int skip_tc = (q80_tc_min > 0 && M >= q80_tc_min && ink_has_int8_tc()) ? 1 : 0;
         static const int rco_tc_on = [] { const char* e = std::getenv("STRATA_INK_IQ_TC"); return !(e && e[0] == '0'); }();   // the IQ / Q2_0 types of the GSQ-RCO files
+        static const int rco_tg = [] { const char* e = std::getenv("STRATA_INK_IQ_TG"); return e ? std::atoi(e) : 8; }();   // token groups per weight decode in the RCO tensor-core kernels
         static const unsigned rco_mask = [] { const char* e = std::getenv("STRATA_INK_IQ_TC_MASK"); return e ? (unsigned)std::strtoul(e, nullptr, 0) : 0x7Fu; }();
         const int skip_q80 = skip_tc ? (1 | (nl_tc_on ? 2 : 0) | (rco_tc_on ? 4 : 0) | (int)((rco_mask & 0x7Fu) << 8)) : 0;   // bit 0: Q8_0, bit 1: IQ4_NL, bit 2: the RCO types in bits 8..14
         if (skip_q80) k_ink_moe_q80_tc<true><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
         if (skip_q80 & 2) k_ink_moe_q80_tc<true, 20><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
         if (skip_q80 & 4) {
-            if (rco_mask & 1u) k_ink_moe_iq_tc<true, 16><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
-            if (rco_mask & 2u) k_ink_moe_iq_tc<true, 17><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
-            if (rco_mask & 4u) k_ink_moe_iq_tc<true, 18><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
-            if (rco_mask & 8u) k_ink_moe_iq_tc<true, 19><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
-            if (rco_mask & 16u) k_ink_moe_iq_tc<true, 21><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
-            if (rco_mask & 32u) k_ink_moe_iq_tc<true, 22><<<g_gu_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
+            if (rco_mask & 1u) launch_iq_tc<true, 16>(g_gu_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
+            if (rco_mask & 2u) launch_iq_tc<true, 17>(g_gu_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
+            if (rco_mask & 4u) launch_iq_tc<true, 18>(g_gu_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
+            if (rco_mask & 8u) launch_iq_tc<true, 19>(g_gu_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
+            if (rco_mask & 16u) launch_iq_tc<true, 21>(g_gu_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
+            if (rco_mask & 32u) launch_iq_tc<true, 22>(g_gu_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.xq_g32, nullptr, ws.h_f32);
         }
         static const int spec_on = [] { const char* e = std::getenv("STRATA_INK_GGUF_SPEC"); return !(e && e[0] == '0'); }();
         if (gmt == 1) {
@@ -4512,8 +4553,8 @@ inline void launch_ink_moe_dispatch_only(
         const int nblk_h = P * (kInkInter / 32);
         k_ink_quant_q8_1_g32<<<(nblk_h + 7) / 8, 256, 0, st>>>(ws.h_f32, ws.hq_g32, P, kInkInter);
         if (skip_q80) k_ink_moe_q80_tc<false><<<g_dn_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.hq_g32, ws.topk_w, ws.y_pair);
-        if (skip_q80 & 2) k_ink_moe_q80_tc<false, 20><<<g_dn_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.hq_g32, ws.topk_w, ws.y_pair);
-        if ((skip_q80 & 4) && (rco_mask & 64u)) k_ink_moe_iq_tc<false, 42><<<g_dn_tc, 128, 0, st>>>(sec4_base, experts, ws.tb, ws.hq_g32, ws.topk_w, ws.y_pair);
+        if (skip_q80 & 2) launch_iq_tc<false, 20>(g_dn_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.hq_g32, ws.topk_w, ws.y_pair);
+        if ((skip_q80 & 4) && (rco_mask & 64u)) launch_iq_tc<false, 42>(g_dn_tc, st, rco_tg, sec4_base, experts, ws.tb, ws.hq_g32, ws.topk_w, ws.y_pair);
         if (gmt == 1) {
             launch_dn_gguf_spec<1>(g_dn, st, spec_on ? info.gguf_dn_t : 0u, sec4_base, experts, ws.tb, ws.hq_g32, ws.h_f32, ws.topk_w, ws.y_pair, skip_q80);
         } else if (gmt == 2) {
