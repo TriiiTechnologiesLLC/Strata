@@ -5563,7 +5563,8 @@ struct InkCudaRunner {
             run_sconv_uniform(d_moe_raw, m.d_sconv_mlp[ip], nullptr, d_cur, kInkHidden, 2 * kInkKVDim + kInkHidden, 0, true);
         } else {
             const bool rtx_moe = rtx5090::moe_opt_on() && !m.ls_active;
-            const bool atomic_pf_moe = rtx_moe && (mode == 0 && M >= 1024 && !rtx5090::exact_mode_on() && !m.moe_info[ip].has_sk && !m.moe_info[ip].has_gguf);
+            static const bool pf_atomic_env = [] { const char* e = std::getenv("STRATA_INK_5090_PF_ATOMIC"); return e && e[0] == '1'; }();   // the fast prefill sums the MoE output with float atomics (order-dependent rounding): off by default, so the same prompt gives the same tokens on every start; =1 restores the atomic path
+            const bool atomic_pf_moe = pf_atomic_env && rtx_moe && (mode == 0 && M >= 1024 && !rtx5090::exact_mode_on() && !m.moe_info[ip].has_sk && !m.moe_info[ip].has_gguf);
             const bool fuse_pf_reduce = rtx_moe && (mode == 0 && M > 16) && !atomic_pf_moe;
             const bool fuse_moe_sconv = ((mode == 0 && M == 1) || mode == 1 || mode == 2 || (mode == 3 && d_bspec_sconv == nullptr) || fuse_pf_reduce);
             if (m.all_sf4_vram && fp8_sm.ready && cur_stage == 0 && M <= 3) {

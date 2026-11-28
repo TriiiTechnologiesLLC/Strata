@@ -16780,6 +16780,34 @@
    "retired_in": ""
   },
   {
+   "name": "STRATA_INK_5090_PF_ATOMIC",
+   "backends": [
+    "cuda-hip"
+   ],
+   "reads": [
+    {
+     "file": "engine/src/inkling2/cuda/ink_runner.cuh",
+     "line": 5566,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    }
+   ],
+   "parse": "flag",
+   "default_state": "off",
+   "code_default": null,
+   "engine_sets": [],
+   "engine_defaults": [],
+   "launch_files": [],
+   "launch_sets": [],
+   "launch_reads": [],
+   "doc_mentions": [],
+   "status": "rollback",
+   "owner": "gpu-5090-draftpolicy",
+   "note": "1 restores the atomic float summation of the MoE output in prefill steps of 1024 rows and more (RTX 5090 family): faster, but the rounding order, and so the tokens of a long prompt, change from start to start; the default is the non-atomic reduction",
+   "retire_after": "",
+   "retired_in": ""
+  },
+  {
    "name": "STRATA_INK_ADMIT_PROF",
    "backends": [
     "cuda-hip"

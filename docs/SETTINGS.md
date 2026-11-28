@@ -446,7 +446,7 @@ Off unless you set them. The last column says where each one is described.
 | `STRATA_WATCHDOG_S` | text | NVIDIA and AMD, Intel Arc | [DETAILS.md](DETAILS.md) |
 | `STRATA_WDDM_BUDGET` | number | AMD, Intel Arc | [AMD_HIP.md](AMD_HIP.md) |
 
-## Switches that go back to earlier behaviour (139)
+## Switches that go back to earlier behaviour (140)
 
 These behaviours are on by default. Setting the switch returns the earlier behaviour; the notes in the register say which
 version made it the default.
@@ -486,6 +486,7 @@ version made it the default.
 | `STRATA_IGPU_PROMPT_SET` | on / off | NVIDIA and AMD | v0.2.16 | [AMD_HIP.md](AMD_HIP.md), [RADEON_780M.md](RADEON_780M.md), [release-notes-0.2.1.md](release-notes-0.2.1.md) |
 | `STRATA_IL_PAD` | number | NVIDIA and AMD | v0.2.16 | - |
 | `STRATA_INK_5090_DRAFTPOL` | text | NVIDIA | - | - |
+| `STRATA_INK_5090_PF_ATOMIC` | on / off | NVIDIA and AMD | - | - |
 | `STRATA_INK_CHUNK_AUTO` | number | NVIDIA and AMD | v0.2.21 | - |
 | `STRATA_INK_EXACT_GRAPH` | on / off | NVIDIA and AMD | v0.2.21 | - |
 | `STRATA_INK_EXACT_ROWS` | on / off | AMD | v0.2.21 | - |
