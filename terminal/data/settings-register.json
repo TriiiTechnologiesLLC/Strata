@@ -1774,7 +1774,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4539,
+     "line": 4541,
      "value": "\"1\""
     }
    ],
@@ -4746,7 +4746,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4537,
+     "line": 4539,
      "value": "\"1\""
     }
    ],
@@ -5370,7 +5370,7 @@
    "launch_reads": [
     {
      "file": "terminal/setup.py",
-     "line": 9081
+     "line": 9178
     }
    ],
    "doc_mentions": [
@@ -8901,7 +8901,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4540,
+     "line": 4542,
      "value": "\"1\""
     }
    ],
@@ -10470,7 +10470,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4536,
+     "line": 4538,
      "value": "\"1\""
     }
    ],
@@ -10616,7 +10616,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4536,
+     "line": 4538,
      "value": "\"1\""
     }
    ],
@@ -10722,7 +10722,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4536,
+     "line": 4538,
      "value": "\"1\""
     }
    ],
@@ -10861,7 +10861,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4536,
+     "line": 4538,
      "value": "\"2\""
     }
    ],
@@ -11048,7 +11048,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4540,
+     "line": 4542,
      "value": "\"1\""
     }
    ],
@@ -11439,19 +11439,19 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3065,
+     "line": 3070,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3156,
+     "line": 3161,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3190,
+     "line": 3195,
      "backend": "hip",
      "fn": "getenv"
     },
@@ -11597,13 +11597,13 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3126,
+     "line": 3131,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3152,
+     "line": 3157,
      "backend": "hip",
      "fn": "getenv"
     },
@@ -14488,7 +14488,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 938,
+     "line": 939,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -14521,7 +14521,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 945,
+     "line": 946,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -14818,13 +14818,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2955,
+     "line": 2959,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2955,
+     "line": 2959,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -15002,13 +15002,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 877,
+     "line": 878,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 877,
+     "line": 878,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -15081,7 +15081,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 951,
+     "line": 952,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -15114,13 +15114,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 5667,
+     "line": 5672,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 5667,
+     "line": 5672,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -15455,37 +15455,37 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 3215,
+     "line": 3219,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 3215,
+     "line": 3219,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 7653,
+     "line": 7658,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 7653,
+     "line": 7658,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 8590,
+     "line": 8595,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 8590,
+     "line": 8595,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -16780,6 +16780,40 @@
    "retired_in": ""
   },
   {
+   "name": "STRATA_INK_ADMIT_PROF",
+   "backends": [
+    "cuda-hip"
+   ],
+   "reads": [
+    {
+     "file": "engine/src/inkling2/ink_serve.h",
+     "line": 909,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    },
+    {
+     "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
+     "line": 1647,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    }
+   ],
+   "parse": "flag",
+   "default_state": "off",
+   "code_default": null,
+   "engine_sets": [],
+   "engine_defaults": [],
+   "launch_files": [],
+   "launch_sets": [],
+   "launch_reads": [],
+   "doc_mentions": [],
+   "status": "",
+   "owner": "",
+   "note": "",
+   "retire_after": "",
+   "retired_in": ""
+  },
+  {
    "name": "STRATA_INK_ATTN_PROBE",
    "backends": [
     "cuda-hip"
@@ -17321,13 +17355,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2888,
+     "line": 2892,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2888,
+     "line": 2892,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17400,7 +17434,7 @@
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 1274,
+     "line": 1275,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17507,7 +17541,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2850,
+     "line": 2854,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17540,7 +17574,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 9968,
+     "line": 9986,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17573,7 +17607,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 5762,
+     "line": 5767,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17639,7 +17673,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2766,
+     "line": 2770,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17718,7 +17752,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2763,
+     "line": 2767,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -17856,7 +17890,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 9969,
+     "line": 9987,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -18009,7 +18043,7 @@
     },
     {
      "file": "engine/src/inkling2/metal/ink_metal_backend.mm",
-     "line": 236,
+     "line": 243,
      "backend": "metal",
      "fn": "getenv"
     },
@@ -18166,7 +18200,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 929,
+     "line": 930,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -18212,13 +18246,13 @@
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 1236,
+     "line": 1237,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 1236,
+     "line": 1237,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -18284,7 +18318,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4477,
+     "line": 4517,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18317,7 +18351,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4499,
+     "line": 4540,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18357,7 +18391,7 @@
     },
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 930,
+     "line": 931,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -18456,7 +18490,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1280,
+     "line": 1322,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18555,7 +18589,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/sycl/ink_sy_intelarc_cfg.h",
-     "line": 190,
+     "line": 226,
      "backend": "sycl",
      "fn": "env_truthy_arc"
     }
@@ -18588,7 +18622,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/sycl/ink_sy_intelarc_cfg.h",
-     "line": 189,
+     "line": 225,
      "backend": "sycl",
      "fn": "env_truthy_arc"
     }
@@ -18621,7 +18655,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/sycl/ink_sy_intelarc_cfg.h",
-     "line": 188,
+     "line": 224,
      "backend": "sycl",
      "fn": "env_truthy_arc"
     }
@@ -18654,7 +18688,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4484,
+     "line": 4524,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18687,7 +18721,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4486,
+     "line": 4526,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18720,7 +18754,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4487,
+     "line": 4528,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -18742,6 +18776,34 @@
    "status": "rollback",
    "owner": "inkling2/cuda",
    "note": "GSQ-RCO IQ-type GGUF experts (GSQ lane): tensor-core prefill kernels, type-specialised decode kernels, compact trunk and 256-token chunk. =0 turns the one feature off.",
+   "retire_after": "",
+   "retired_in": ""
+  },
+  {
+   "name": "STRATA_INK_IQ_TG",
+   "backends": [
+    "cuda-hip"
+   ],
+   "reads": [
+    {
+     "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
+     "line": 4527,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    }
+   ],
+   "parse": "int",
+   "default_state": null,
+   "code_default": "8",
+   "engine_sets": [],
+   "engine_defaults": [],
+   "launch_files": [],
+   "launch_sets": [],
+   "launch_reads": [],
+   "doc_mentions": [],
+   "status": "",
+   "owner": "",
+   "note": "",
    "retire_after": "",
    "retired_in": ""
   },
@@ -19128,7 +19190,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/metal/ink_metal_runner.h",
-     "line": 1655,
+     "line": 1674,
      "backend": "metal",
      "fn": "getenv"
     }
@@ -19200,7 +19262,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/metal/ink_metal_runner.h",
-     "line": 2155,
+     "line": 2174,
      "backend": "metal",
      "fn": "getenv"
     }
@@ -19233,7 +19295,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/metal/ink_metal_runner.h",
-     "line": 2811,
+     "line": 2830,
      "backend": "metal",
      "fn": "getenv"
     }
@@ -19266,7 +19328,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4401,
+     "line": 4441,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19338,7 +19400,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 678,
+     "line": 720,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19404,7 +19466,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 671,
+     "line": 713,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19668,7 +19730,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4326,
+     "line": 4366,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19760,6 +19822,34 @@
    "retired_in": ""
   },
   {
+   "name": "STRATA_INK_PREFILL_MIN_SLOT",
+   "backends": [
+    "cuda-hip"
+   ],
+   "reads": [
+    {
+     "file": "engine/src/inkling2/ink_serve.h",
+     "line": 552,
+     "backend": "cuda-hip",
+     "fn": "getenv"
+    }
+   ],
+   "parse": "int",
+   "default_state": null,
+   "code_default": null,
+   "engine_sets": [],
+   "engine_defaults": [],
+   "launch_files": [],
+   "launch_sets": [],
+   "launch_reads": [],
+   "doc_mentions": [],
+   "status": "",
+   "owner": "",
+   "note": "",
+   "retire_after": "",
+   "retired_in": ""
+  },
+  {
    "name": "STRATA_INK_PROF",
    "backends": [
     "cuda-hip"
@@ -19767,13 +19857,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/ink_serve.h",
-     "line": 1379,
+     "line": 1401,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 683,
+     "line": 725,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -19839,7 +19929,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_moe_cuda.cuh",
-     "line": 4482,
+     "line": 4522,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20292,7 +20382,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 2808,
+     "line": 2812,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -20325,7 +20415,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 9770,
+     "line": 9778,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -20424,7 +20514,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 1924,
+     "line": 1928,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -20589,7 +20679,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 424,
+     "line": 435,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -20625,7 +20715,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 425,
+     "line": 436,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -20660,7 +20750,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 424,
+     "line": 435,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -20696,7 +20786,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 425,
+     "line": 436,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -20731,7 +20821,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 424,
+     "line": 435,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -20803,7 +20893,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2305,
+     "line": 2358,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20869,7 +20959,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2432,
+     "line": 2485,
      "backend": "cuda-hip",
      "fn": "env2"
     }
@@ -20902,13 +20992,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1694,
+     "line": 1742,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2057,
+     "line": 2106,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -20941,7 +21031,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2061,
+     "line": 2110,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21013,7 +21103,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 425,
+     "line": 436,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -21386,13 +21476,13 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1690,
+     "line": 1738,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1905,
+     "line": 1954,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21458,7 +21548,7 @@
    "reads": [
     {
      "file": "engine/include/strata/core/ink_sm120_table.hpp",
-     "line": 465,
+     "line": 476,
      "backend": "cuda",
      "fn": "env_get"
     }
@@ -21593,7 +21683,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/ink_serve.h",
-     "line": 551,
+     "line": 555,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21638,7 +21728,7 @@
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2095,
+     "line": 2144,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21683,7 +21773,7 @@
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2097,
+     "line": 2146,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21761,7 +21851,7 @@
     },
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 2098,
+     "line": 2147,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -21827,7 +21917,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 1141,
+     "line": 1183,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -22433,7 +22523,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 9763,
+     "line": 9768,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -22703,7 +22793,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 906,
+     "line": 907,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -22796,7 +22886,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/hip/ink_hip_backend.hip.cpp",
-     "line": 684,
+     "line": 685,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -22932,7 +23022,7 @@
    "reads": [
     {
      "file": "engine/src/inkling2/cuda/ink_cuda_backend.cu",
-     "line": 662,
+     "line": 704,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -26506,7 +26596,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4540,
+     "line": 4542,
      "value": "\"1\""
     }
    ],
@@ -29496,7 +29586,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 11499,
+     "line": 11665,
      "value": "\"1\" if stream else \"0\""
     }
    ],
@@ -29998,7 +30088,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4819,
+     "line": 4821,
      "value": "\"1\""
     }
    ],
@@ -30218,7 +30308,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4539,
+     "line": 4541,
      "value": "\"1\""
     }
    ],
@@ -33550,7 +33640,7 @@
    "launch_reads": [
     {
      "file": "terminal/setup.py",
-     "line": 9080
+     "line": 9177
     }
    ],
    "doc_mentions": [
@@ -35487,7 +35577,7 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3661,
+     "line": 3666,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -35689,19 +35779,19 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3419,
+     "line": 3424,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3435,
+     "line": 3440,
      "backend": "hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3453,
+     "line": 3458,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
@@ -35842,7 +35932,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2807,
+     "line": 2812,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -35878,7 +35968,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3418,
+     "line": 3423,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -35913,7 +36003,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3434,
+     "line": 3439,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -35953,19 +36043,19 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2947,
+     "line": 2952,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2990,
+     "line": 2995,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3059,
+     "line": 3064,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36027,7 +36117,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3444,
+     "line": 3449,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36063,7 +36153,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2811,
+     "line": 2816,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36099,7 +36189,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2975,
+     "line": 2980,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36138,13 +36228,13 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2745,
+     "line": 2750,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3148,
+     "line": 3153,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -36178,13 +36268,13 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2763,
+     "line": 2768,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3227,
+     "line": 3232,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -36218,13 +36308,13 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2751,
+     "line": 2756,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3172,
+     "line": 3177,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -36258,13 +36348,13 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2757,
+     "line": 2762,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3220,
+     "line": 3225,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -36304,13 +36394,13 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2991,
+     "line": 2996,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3556,
+     "line": 3561,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
@@ -36355,7 +36445,7 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2927,
+     "line": 2932,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36390,7 +36480,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2934,
+     "line": 2939,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36423,7 +36513,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2945,
+     "line": 2950,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36456,7 +36546,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2921,
+     "line": 2926,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36489,7 +36579,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3357,
+     "line": 3362,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36527,7 +36617,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3179,
+     "line": 3184,
      "backend": "hip",
      "fn": "getenv"
     },
@@ -36566,7 +36656,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2815,
+     "line": 2820,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -36903,7 +36993,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3791,
+     "line": 3796,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -37074,7 +37164,7 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2848,
+     "line": 2853,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -37107,7 +37197,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 2861,
+     "line": 2866,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -37213,7 +37303,7 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3642,
+     "line": 3647,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -37293,7 +37383,7 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3652,
+     "line": 3657,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -37403,7 +37493,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4537,
+     "line": 4539,
      "value": "\"1\""
     }
    ],
@@ -37828,7 +37918,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3129,
+     "line": 3134,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -38155,7 +38245,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3372,
+     "line": 3377,
      "backend": "cuda-hip",
      "fn": "getenv"
     }
@@ -38188,7 +38278,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3201,
+     "line": 3206,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -38221,7 +38311,7 @@
    "reads": [
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3186,
+     "line": 3191,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -39965,7 +40055,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4541,
+     "line": 4543,
      "value": "\"1\""
     }
    ],
@@ -41994,13 +42084,13 @@
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3503,
+     "line": 3508,
      "backend": "cuda-hip",
      "fn": "getenv"
     },
     {
      "file": "engine/src/prefill/moe_fused_iq.cu",
-     "line": 3584,
+     "line": 3589,
      "backend": "hip",
      "fn": "getenv"
     }
@@ -45165,7 +45255,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4539,
+     "line": 4541,
      "value": "\"1\""
     }
    ],
@@ -45442,7 +45532,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4539,
+     "line": 4541,
      "value": "\"1\""
     }
    ],
@@ -45652,7 +45742,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4541,
+     "line": 4543,
      "value": "\"1\""
     }
    ],
@@ -46754,7 +46844,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4091,
+     "line": 4093,
      "value": "base.get(\"ramKeep\""
     }
    ],
@@ -47212,7 +47302,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 9055,
+     "line": 9152,
      "value": "6"
     },
     {
@@ -47296,7 +47386,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 7650,
+     "line": 7652,
      "value": "frozenset({\"0\""
     }
    ],
@@ -47978,7 +48068,7 @@
     },
     {
      "file": "terminal/setup.py",
-     "line": 4820,
+     "line": 4822,
      "value": "\"0\""
     },
     {
@@ -49388,7 +49478,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4541,
+     "line": 4543,
      "value": "\"1\""
     }
    ],
@@ -54037,7 +54127,7 @@
     },
     {
      "file": "engine/src/inkling2/sycl/ink_sy_intelarc_cfg.h",
-     "line": 187,
+     "line": 223,
      "backend": "sycl",
      "fn": "env_truthy_arc"
     }
@@ -55966,7 +56056,7 @@
    "launch_sets": [
     {
      "file": "terminal/setup.py",
-     "line": 4540,
+     "line": 4542,
      "value": "\"1\""
     }
    ],
