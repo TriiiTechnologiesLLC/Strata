@@ -500,7 +500,7 @@ public:
         max_slots_ = std::max(1, std::min(kMaxParallelSlots, opts.parallel));
         strata::ink::df2_small_card() = prop.totalGlobalMem < (24ull << 30);
         strata::ink::df2_parallel() = max_slots_;   // DFlash 2 as the default drafter only up to 16 slots (see ink_dflash2_path.cuh)
-        const int kv_offload_mode = (opts.kv_offload == "on") ? 1 : ((opts.kv_offload == "off") ? -1 : 0);
+        int kv_offload_mode = (opts.kv_offload == "on") ? 1 : ((opts.kv_offload == "off") ? -1 : 0);
         // all of the sizing below is plan_vram_reserve() / plan_prefill_chunk() (top of this file)
         VramPlanIn plan_in;
         plan_in.opts = &opts;
@@ -522,6 +522,48 @@ public:
             return plan_vram_reserve(plan_in);
         };
         draft_forced_ = opts.draft_forced || strata::ink::df2_forced_by_env();
+        // AUTO K/V PLACEMENT for many slots on a card under 30 GiB. With --kv-offload auto the planner keeps the first 4,096 K/V positions of every slot in VRAM; on a 24 GB card with
+        // SQ-20 v2 and 64 slots that moved about 1,350 of the 3,072 experts to host RAM (RTX 3090 C64 e2e 72 -> 139 tok/s with --kv-offload on, RTX 4090 74 -> 162, 5080 16 GB 7.3 -> 10.9).
+        // So: plan the placement the old way first (this plan, K/V in VRAM); only when experts would not all fit next to it (more than 1% of the expert bytes short, the
+        // loader's own arithmetic as in the DFlash 2 residency rule below) does the K/V go to host RAM, as with --kv-offload on. A model whose experts fit (IQ3_S on 24 GB: 4090 C64
+        // 254 -> 239 tok/s with host K/V) keeps the old placement. One slot and 2 to 16 slots are not touched (128K decode of one slot is better with the K/V in VRAM).
+        // An explicit --kv-offload on|off always wins. 30 GiB, not 32: a 32 GB card (RTX 5090, V100 32 GB) reports 31.7 to 31.9 GiB. One GPU only (a layer split or two cards keep their own plan).
+        if (kv_offload_mode == 0 && max_slots_ > 16 && prop.totalGlobalMem < (30ull << 30) && opts.gpus <= 1 && opts.layer_split.empty() && opts.gpu_ids.size() <= 1 &&
+            (mf.kind == ModelSourceKind::Strata || mf.kind == ModelSourceKind::Gguf)) {
+            const VramPlan plan_vram = plan_for(false);   // the old placement: auto K/V (kv_offload_mode 0) as planned today
+            size_t vf0 = 0, vt0 = 0;
+            if (cudaMemGetInfo(&vf0, &vt0) == cudaSuccess && vt0 > 0) {
+                size_t trunk0 = 0, sec40 = 0;
+                if (mf.kind == ModelSourceKind::Strata) {
+                    trunk0 = (size_t)mf.rd.header().sections[1].byte_length;
+                    sec40 = (size_t)mf.rd.header().sections[4].byte_length;
+                } else {
+                    std::error_code fec0;
+                    const size_t fsz0 = (size_t)std::filesystem::file_size(mf.path, fec0);
+                    trunk0 = (mf.m.embed_host_tail ? 1400ull : 3400ull) << 20;
+                    sec40 = (fec0 || fsz0 <= trunk0) ? 0u : fsz0 - trunk0;
+                }
+                if (sec40 > 0) {
+                    const size_t wf0 = strata::ink::InkCudaModel::wddm_safety_floor(vt0);
+                    const size_t base0 = ((vt0 >= (20ull << 30)) ? (1600ull << 20) : (vt0 <= (13ull << 30)) ? (960ull << 20) : (1280ull << 20)) + (wf0 > (512ull << 20) ? (wf0 - (512ull << 20)) : 0ull);
+                    const size_t reserve0 = std::max(base0, plan_vram.min_reserve_bytes + wf0);
+                    const size_t room0 = (vf0 > trunk0 + reserve0) ? (vf0 - trunk0 - reserve0) : 0u;
+                    const size_t short0 = (sec40 > room0) ? (sec40 - room0) : 0u;
+                    const bool spill = (double)short0 > 0.01 * (double)sec40;
+                    if (spill) {
+                        kv_offload_mode = 1;
+                        std::fprintf(stderr, "[InkCUDA] --kv-offload auto: %d slots on a %.1f GiB card: with the K/V in VRAM the experts (%.1f GiB) do not fit next to it (%.1f GiB of room, %.0f%% short): "
+                                             "the K/V goes to host RAM as with --kv-offload on, so more of the experts stay on the card (--kv-offload off keeps it in VRAM)\n",
+                                     max_slots_, (double)prop.totalGlobalMem / 1073741824.0, (double)sec40 / 1073741824.0, (double)room0 / 1073741824.0, 100.0 * (double)short0 / (double)sec40);
+                    } else {
+                        std::fprintf(stderr, "[InkCUDA] --kv-offload auto: %d slots on a %.1f GiB card: the experts (%.1f GiB) fit next to the K/V in VRAM (%.1f GiB of room): "
+                                             "the K/V placement stays as it was (--kv-offload on moves it to host RAM)\n",
+                                     max_slots_, (double)prop.totalGlobalMem / 1073741824.0, (double)sec40 / 1073741824.0, (double)room0 / 1073741824.0);
+                    }
+                }
+            }
+        }
+        plan_in.kv_offload_mode = kv_offload_mode;
         VramPlan plan = plan_for(false);
         // below sm_80 (ink_draft_rule.hpp principle 1b) the rule also covers a .gguf: its expert bytes are estimated from the file (minus the dense trunk: 1.4 GiB compact, 3.4 GiB otherwise)
         const bool legacy_arch = sm_cc < 80;
